@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 
 const cases = [
-  ["/ai-poc", "AI-POC"],
-  ["/robot-poc", "ROBOT-POC"],
-  ["/dexterous-hand", "HAND-SELECT"],
+  ["ai-poc", "AI-POC"],
+  ["robot-poc", "ROBOT-POC"],
+  ["dexterous-hand", "HAND-SELECT"],
 ] as const;
 
 for (const [path, code] of cases) {

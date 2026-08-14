@@ -1,7 +1,9 @@
 ---
 import { ArrowUpRight, Bot, BrainCircuit, Hand, ShieldCheck } from "@lucide/astro";
 import BaseLayout from "../layouts/BaseLayout.astro";
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const href = (path: string) => `${base}${path}`;
 ---
 <BaseLayout title="CAVWIC Solutions Lab" current="home">
-  <section class="lab-home"><div class="home-title"><p>LOCAL-FIRST PRESALES TOOLKIT / 01</p><h1>把方案的未知项，变成下一步验证</h1><span><ShieldCheck size={17}/> 浏览器本地运行 · 不上传输入数据</span></div><div class="tool-index"><a href="/ai-poc"><BrainCircuit size={25}/><span>01 / ENTERPRISE AI</span><h2>企业 AI 方案与 POC 工作台</h2><p>需求、数据、权限、RAG/Agent、评测、成本和人工接管。</p><ArrowUpRight size={20}/></a><a href="/robot-poc"><Bot size={25}/><span>02 / ROBOTICS</span><h2>机器人场景资格与 POC Studio</h2><p>现场、状态机、安全、失败降级、系统依赖和验收。</p><ArrowUpRight size={20}/></a><a href="/dexterous-hand"><Hand size={25}/><span>03 / DEXTEROUS HAND</span><h2>灵巧手选型与抓取测试设计器</h2><p>透明权重、未知字段、敏感性分析、对象集和验证记录。</p><ArrowUpRight size={20}/></a></div><p class="home-disclaimer">所有评分公式公开。结果用于组织证据，不是行业标准，也不能替代正式安全评估、厂商询证或样机测试。</p></section>
+  <section class="lab-home"><div class="home-title"><p>LOCAL-FIRST PRESALES TOOLKIT / 01</p><h1>把方案的未知项，变成下一步验证</h1><span><ShieldCheck size={17}/> 浏览器本地运行 · 不上传输入数据</span></div><div class="tool-index"><a href={href("/ai-poc")}><BrainCircuit size={25}/><span>01 / ENTERPRISE AI</span><h2>企业 AI 方案与 POC 工作台</h2><p>需求、数据、权限、RAG/Agent、评测、成本和人工接管。</p><ArrowUpRight size={20}/></a><a href={href("/robot-poc")}><Bot size={25}/><span>02 / ROBOTICS</span><h2>机器人场景资格与 POC Studio</h2><p>现场、状态机、安全、失败降级、系统依赖和验收。</p><ArrowUpRight size={20}/></a><a href={href("/dexterous-hand")}><Hand size={25}/><span>03 / DEXTEROUS HAND</span><h2>灵巧手选型与抓取测试设计器</h2><p>透明权重、未知字段、敏感性分析、对象集和验证记录。</p><ArrowUpRight size={20}/></a></div><p class="home-disclaimer">所有评分公式公开。结果用于组织证据，不是行业标准，也不能替代正式安全评估、厂商询证或样机测试。</p></section>
 </BaseLayout>

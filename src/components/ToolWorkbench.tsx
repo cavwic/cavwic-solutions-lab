@@ -113,6 +113,8 @@ export default function ToolWorkbench({ kind }: Props) {
   const inputRef = useRef<HTMLInputElement>(null);
   const t = copy[locale];
   const score = useMemo(() => calculateScore(state), [state]);
+  const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+  const nextPath = kind === "ai" ? "/robot-poc" : kind === "robot" ? "/dexterous-hand" : "/ai-poc";
 
   useEffect(() => {
     const systemLocale: Locale = navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
@@ -247,7 +249,7 @@ export default function ToolWorkbench({ kind }: Props) {
           <div className="mini-bars">{state.criteria.map((item) => <div key={item.id}><span style={{ width: `${item.score}%` }}></span></div>)}</div>
           <p className="formula">{t.formula}</p>
           <p className="disclaimer"><AlertTriangle size={17}/>{t.disclaimer}</p>
-          <a className="next-tool" href={kind === "ai" ? "/robot-poc" : kind === "robot" ? "/dexterous-hand" : "/ai-poc"}>{locale === "zh" ? "下一个工作台" : "Next workbench"}<ChevronRight size={17}/></a>
+          <a className="next-tool" href={`${base}${nextPath}`}>{locale === "zh" ? "下一个工作台" : "Next workbench"}<ChevronRight size={17}/></a>
         </aside>
       </div>
     </div>

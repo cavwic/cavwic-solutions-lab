@@ -51,11 +51,11 @@ test("personal site supports locale, theme, long content, and dense data", async
 
 test("solutions lab has stable responsive workbench dimensions", async ({ page }, testInfo) => {
   for (const slug of ["ai-poc", "robot-poc", "dexterous-hand"]) {
-    await page.goto(`/${slug}`);
+    await page.goto(slug);
     await expect(page.locator(".workbench")).toHaveAttribute("data-ready", "true");
     await expect(page.locator(".score-dial strong")).toBeVisible();
     await expectNoHorizontalOverflow(page);
   }
-  await page.goto("/dexterous-hand");
+  await page.goto("dexterous-hand");
   await page.screenshot({ path: testInfo.outputPath("lab-dexterous-hand.png"), fullPage: true });
 });

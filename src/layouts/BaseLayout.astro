@@ -2,12 +2,14 @@
 import { Bot, BrainCircuit, Hand, House } from "@lucide/astro";
 import "../styles/global.css";
 const { title, current } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const href = (path: string) => `${base}${path}`;
 ---
 <!doctype html>
 <html lang="zh-CN">
   <head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width"/><meta name="description" content="Local-first presales qualification and POC tools."/><title>{title}</title></head>
   <body>
-    <header class="lab-header"><a class="lab-brand" href="/"><span>C</span><strong>CAVWIC SOLUTIONS LAB</strong></a><nav aria-label="Workbenches"><a class:list={{ active: current === "home" }} href="/" title="Home"><House size={18}/><span>Home</span></a><a class:list={{ active: current === "ai" }} href="/ai-poc" title="AI POC"><BrainCircuit size={18}/><span>AI POC</span></a><a class:list={{ active: current === "robot" }} href="/robot-poc" title="Robot POC"><Bot size={18}/><span>Robot POC</span></a><a class:list={{ active: current === "hand" }} href="/dexterous-hand" title="Dexterous hand"><Hand size={18}/><span>Hand</span></a></nav></header>
+    <header class="lab-header"><a class="lab-brand" href={href("/")}><span>C</span><strong>CAVWIC SOLUTIONS LAB</strong></a><nav aria-label="Workbenches"><a class:list={{ active: current === "home" }} href={href("/")} title="Home"><House size={18}/><span>Home</span></a><a class:list={{ active: current === "ai" }} href={href("/ai-poc")} title="AI POC"><BrainCircuit size={18}/><span>AI POC</span></a><a class:list={{ active: current === "robot" }} href={href("/robot-poc")} title="Robot POC"><Bot size={18}/><span>Robot POC</span></a><a class:list={{ active: current === "hand" }} href={href("/dexterous-hand")} title="Dexterous hand"><Hand size={18}/><span>Hand</span></a></nav></header>
     <main><slot/></main>
   </body>
 </html>
