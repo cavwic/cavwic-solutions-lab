@@ -1,0 +1,12 @@
+---
+import { ArrowRight, Archive } from "@lucide/astro";
+const { title } = Astro.props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+---
+<section class="legacy-notice">
+  <Archive size={28}/>
+  <p>LEGACY TOOL / RETIRED</p>
+  <h1>{title}</h1>
+  <p>该评分工具已停止维护。相关售前、POC、要求响应和交底记录已并入解决方案项目工作台，不再用加权分数决定后续工作。</p>
+  <a href={`${base}/`}>进入解决方案项目工作台 <ArrowRight size={18}/></a>
+</section>

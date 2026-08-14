@@ -1,18 +1,32 @@
 # CAVWIC Solutions Lab
 
-Browser-local presales workbenches for enterprise AI POCs, robot scenario qualification, and dexterous-hand selection and validation.
+A browser-based workspace for practical solution engineering. It covers presales discovery, tender requirement review, technical bid preparation, POC planning, and post-award technical handover.
 
-## Live tools
+The application is static. It does not contain a server upload path or an embedded model key. Users can work in browser storage, authorize a local folder in compatible Chromium browsers, or exchange a project ZIP.
 
-- [Enterprise AI Solution & POC Workbench](https://cavwic.github.io/cavwic-solutions-lab/ai-poc)
-- [Robot Scenario Qualification & POC Studio](https://cavwic.github.io/cavwic-solutions-lab/robot-poc)
-- [Dexterous Hand Selection & Grasp Test Designer](https://cavwic.github.io/cavwic-solutions-lab/dexterous-hand)
+## Workbenches
 
-Inputs stay in the current browser. The tools use transparent scoring formulas and are decision aids, not industry standards.
+- Solution project workflow: project boundary, presales pack, POC, actions, commitments, and handover.
+- Tender requirement extraction and review: source segments, requirement rows, discovery/tender comparison, mandatory and scoring markers.
+- Technical bid package: evidence register, response and deviation matrix, technical sections, package register, and formal exports.
+
+The internal response states are confirmed, conditional, customization required, evidence missing, and unsupported. The application does not convert an unknown or evidence gap into a compliant response.
+
+## Files and exports
+
+Input parsing supports text-based PDF, DOCX, XLSX, PPTX, Markdown, TXT, and CSV. Image-only PDFs are flagged for OCR rather than guessed.
+
+Projects can export Markdown, UTF-8 CSV, DOCX, XLSX, PPTX, and ZIP. Original source files are excluded from a ZIP unless the user selects the source option.
 
 ## Agent Skills
 
-The `skills/` directory contains five reusable skills with instructions, templates, examples, validation scripts, and operating boundaries.
+The repository adds three primary Skills:
+
+- `solution-workflow`
+- `tender-requirement-extraction`
+- `technical-bid-package`
+
+Versioned ZIP files and SHA-256 hashes are generated under `public/downloads/skills/`. Existing research and review Skills remain available under `skills/`.
 
 ## Development
 
@@ -22,4 +36,6 @@ npm run dev
 npm run verify
 ```
 
-The site is built with Astro, React, TypeScript, Zod, Vitest, Playwright, and Lucide.
+The stack is Astro, React, TypeScript, Zod, Vitest, Playwright, Lucide, PDF.js, Mammoth, ExcelJS, docx, PptxGenJS, and JSZip.
+
+Software is licensed under MIT. Skill instructions, references, examples, and reusable document templates are licensed under CC BY 4.0.

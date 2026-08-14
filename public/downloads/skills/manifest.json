@@ -1,0 +1,28 @@
+{
+  "version": "1.0.0",
+  "generatedAt": "2026-08-14T00:00:00.000Z",
+  "licenses": {
+    "code": "MIT",
+    "content": "CC BY 4.0"
+  },
+  "skills": [
+    {
+      "name": "solution-workflow",
+      "file": "solution-workflow-1.0.0.zip",
+      "bytes": 8527,
+      "sha256": "8f749b69c9dcda59b94dc79cf81a2b651e22019535659e9cfde97c98bfe81675"
+    },
+    {
+      "name": "tender-requirement-extraction",
+      "file": "tender-requirement-extraction-1.0.0.zip",
+      "bytes": 8120,
+      "sha256": "21d209a2c901e215d6df6f05af0bb0ffb16ba0c9168e4f889de0ae6b786d2e53"
+    },
+    {
+      "name": "technical-bid-package",
+      "file": "technical-bid-package-1.0.0.zip",
+      "bytes": 10202,
+      "sha256": "24d50353728110989f8ea758b7b8b668b221840de1467de89575c0628a4c21ce"
+    }
+  ]
+}
