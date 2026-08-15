@@ -7,7 +7,6 @@ import {
   ChevronRight,
   ClipboardCheck,
   Copy,
-  Database,
   Download,
   FileArchive,
   FileCheck2,
@@ -58,7 +57,6 @@ import {
 import {
   compareBaselines,
   createRequirement,
-  createSampleProject,
   inferProjectStage,
   localizeBuiltInProject,
   requirementCoverage,
@@ -90,14 +88,12 @@ const copy = {
     bid: "技术标组包",
     handover: "中标交底",
     outputs: "输出与 Skills",
-    sample: "AI 示例",
     reset: "新建项目",
     projectPath: "项目路径",
     projectName: "项目名称",
     customer: "客户代称",
     industry: "行业",
     owner: "项目责任人",
-    path: "本地工作区路径提示",
     budget: "预算信息",
     deadline: "计划截止日期",
     objective: "业务目标",
@@ -163,8 +159,6 @@ const copy = {
     codexEyebrow: "CODEX / 本地 SKILL",
     downloadsEyebrow: "下载 / V1.0.0",
     qualityEyebrow: "质量检查",
-    robotSample: "机器人示例",
-    electromechanicalSample: "复杂机电示例",
     darkMode: "切换到深色模式",
     lightMode: "切换到浅色模式",
     remove: "删除",
@@ -179,14 +173,12 @@ const copy = {
     bid: "Technical bid pack",
     handover: "Award handover",
     outputs: "Outputs and Skills",
-    sample: "AI sample",
     reset: "New project",
     projectPath: "Project folder",
     projectName: "Project name",
     customer: "Customer alias",
     industry: "Industry",
     owner: "Project owner",
-    path: "Local workspace path hint",
     budget: "Budget information",
     deadline: "Target deadline",
     objective: "Business objective",
@@ -252,8 +244,6 @@ const copy = {
     codexEyebrow: "CODEX / LOCAL SKILL",
     downloadsEyebrow: "DOWNLOADS / V1.0.0",
     qualityEyebrow: "QUALITY GATE",
-    robotSample: "Robot sample",
-    electromechanicalSample: "Electromechanical sample",
     darkMode: "Switch to dark mode",
     lightMode: "Switch to light mode",
     remove: "Remove",
@@ -415,13 +405,6 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     document.documentElement.dataset.theme = next;
   };
 
-  const loadSample = (kind: "ai" | "robot" | "electromechanical") => {
-    const sample = createSampleProject(kind, locale);
-    setProject(syncProjectStage(sample));
-    setSelectedSourceId(sample.sources[1]?.id || sample.sources[0]?.id || "");
-    setSelectedRequirementId(sample.requirements[1]?.id || sample.requirements[0]?.id || "");
-  };
-
   const parseFiles = async (files: FileList | null) => {
     if (!files?.length) return;
     setBusy(true);
@@ -544,7 +527,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const taskPrompt = useMemo(() => {
-    const path = project.localPathHint || `<${locale === "zh" ? "请填写本地工作区绝对路径" : "enter the absolute local workspace path"}>`;
+    const path = directoryHandle
+      ? `<${locale === "zh" ? `请在 Codex 中指定已选择的“${directoryHandle.name}”文件夹完整路径` : `specify the full path of the selected “${directoryHandle.name}” folder in Codex`}>`
+      : `<${locale === "zh" ? "请在 Codex 中指定项目目录的完整路径" : "specify the full project folder path in Codex"}>`;
     if (locale === "zh") {
       if (taskKind === "extract") return `使用 $tender-requirement-extraction 处理工作区 ${path} 中项目 ${project.id}。读取 sources 目录的招标书与补遗文件，逐条保留页码或段落来源，输出 requirements.csv、requirements.md 和更新后的 project.json。不得把缺少证据的要求写成满足。`;
       if (taskKind === "bid") return `使用 $technical-bid-package 处理工作区 ${path} 中项目 ${project.id}。只使用已复核的招标要求和 library 中已核验资料，生成技术方案、响应表、偏离表、部署与验收文件以及 presentation.md。未知、缺少证据和商务价格事项必须保留待确认。`;
@@ -553,7 +538,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     if (taskKind === "extract") return `Use $tender-requirement-extraction for project ${project.id} in workspace ${path}. Read the tender and amendment files under sources, preserve a page or paragraph locator for every requirement, and produce requirements.csv, requirements.md, and an updated project.json. Never mark a requirement as compliant when evidence is missing.`;
     if (taskKind === "bid") return `Use $technical-bid-package for project ${project.id} in workspace ${path}. Use only reviewed tender requirements and verified materials from library. Produce the technical proposal, response matrix, deviation table, deployment and acceptance documents, and presentation.md. Keep unknown items, evidence gaps, and commercial pricing matters pending for human review.`;
     return `Use $solution-workflow for project ${project.id} in workspace ${path}. Review the presales, tender requirement, technical bid, and award handover stages. Call $tender-requirement-extraction and $technical-bid-package when needed. Update project.json and outputs, then list every item that still requires human confirmation.`;
-  }, [project.id, project.localPathHint, taskKind, locale]);
+  }, [directoryHandle, project.id, taskKind, locale]);
 
   const renderProjectContext = () => <section className="work-section">
     <div className="section-heading"><div><p>{t.projectEyebrow}</p><h2>{t.projectContext}</h2></div><span>{project.schemaVersion}</span></div>
@@ -562,7 +547,6 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <Field label={t.customer}><input value={project.customerAlias} onChange={(event) => updateProject("customerAlias", event.target.value)} /></Field>
       <Field label={t.industry}><input value={project.industry} onChange={(event) => updateProject("industry", event.target.value)} /></Field>
       <Field label={t.owner}><input value={project.owner} onChange={(event) => updateProject("owner", event.target.value)} /></Field>
-      <Field label={t.path} wide><input value={project.localPathHint} placeholder="D:\Solutions\project-name" onChange={(event) => updateProject("localPathHint", event.target.value)} /></Field>
       <Field label={t.budget}><input value={project.budget} onChange={(event) => updateProject("budget", event.target.value)} /></Field>
       <Field label={t.deadline}><input type="date" value={project.deadline} onChange={(event) => updateProject("deadline", event.target.value)} /></Field>
       <Field label={t.objective} wide><textarea rows={4} value={project.objective} onChange={(event) => updateProject("objective", event.target.value)} /></Field>
@@ -652,7 +636,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <div className="header-metrics"><div><strong>{coverage.total}</strong><span>{t.total}</span></div><div><strong>{coverage.evidenced}</strong><span>{t.evidenced}</span></div><div><strong>{coverage.approved}</strong><span>{t.approved}</span></div><div><strong>{coverage.pending}</strong><span>{t.pending}</span></div></div>
     </header>
     <div className="privacy-bar"><ShieldCheck size={17}/><span>{t.local}</span><span className="notice" aria-live="polite">{busy ? (locale === "zh" ? "处理中…" : "Working…") : notice}</span></div>
-    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.sample} onClick={() => loadSample("ai")} title={t.sample}><Database size={17}/><span>{t.sample}</span></button><button type="button" aria-label={t.robotSample} onClick={() => loadSample("robot")} title={t.robotSample}><Database size={17}/><span>{t.robotSample}</span></button><button type="button" aria-label={t.electromechanicalSample} onClick={() => loadSample("electromechanical")} title={t.electromechanicalSample}><Database size={17}/><span>{t.electromechanicalSample}</span></button><button type="button" aria-label={t.reset} onClick={() => setProject(syncProjectStage(createEmptyProject(locale)))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className={`toolbar-spacer project-path-command${directoryHandle ? " active" : ""}`} type="button" disabled={busy} aria-label={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`} onClick={() => void chooseDirectory()} title={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`}><FolderOpen size={17}/><span>{directoryHandle?.name || t.projectPath}</span></button><button type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
+    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.reset} onClick={() => setProject(syncProjectStage(createEmptyProject(locale)))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className={`project-path-command${directoryHandle ? " active" : ""}`} type="button" disabled={busy} aria-label={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`} onClick={() => void chooseDirectory()} title={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`}><FolderOpen size={17}/><span>{directoryHandle?.name || t.projectPath}</span></button><button className="toolbar-settings-start" type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
     <div className="workspace-shell">
       <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status" data-stage={currentStage}><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][currentStage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
       <main className="workspace-content">{content}</main>

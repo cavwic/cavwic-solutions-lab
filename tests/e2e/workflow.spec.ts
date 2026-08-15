@@ -11,18 +11,20 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("runs the presales-to-handover project flow and persists edits", async ({ page }) => {
-  await page.getByRole("button", { name: /AI 示例|AI sample/ }).click();
   const projectName = page.locator(".field-grid input").first();
-  await expect(projectName).toHaveValue("企业知识助手售前与技术投标");
+  await expect(projectName).toHaveValue("新建解决方案项目");
   await projectName.fill("端到端解决方案项目");
 
   await page.getByRole("button", { name: /招标要求|Tender requirements/ }).click();
-  await expect(page.locator(".source-tabs button")).toHaveCount(2);
-  await expect(page.locator(".requirement-index button")).toHaveCount(2);
+  await page.locator('input[type="file"][accept*=".pdf"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The system shall retain audit logs.") });
+  await page.locator(".segment-list article button").first().click();
+  await expect(page.locator(".source-tabs button")).toHaveCount(1);
+  await expect(page.locator(".requirement-index button")).toHaveCount(1);
   await expect(page.locator(".diff-list > div")).toHaveCount(1);
 
   await page.getByRole("button", { name: /技术标组包|Technical bid pack/ }).click();
   await expect(page.locator(".response-row")).toHaveCount(1);
+  await page.locator("section:has(.evidence-table) .icon-command").click();
   await expect(page.locator(".evidence-table .table-row")).toHaveCount(1);
   await page.locator(".response-row select").first().selectOption("confirmed");
   await page.locator(".evidence-checks input").first().check();
@@ -36,7 +38,6 @@ test("runs the presales-to-handover project flow and persists edits", async ({ p
 });
 
 test("exports project files and exposes versioned Skill downloads", async ({ page }) => {
-  await page.getByRole("button", { name: /AI 示例|AI sample/ }).click();
   await page.getByRole("button", { name: /输出与 Skills|Outputs and Skills/ }).click();
   await expect(page.locator(".format-grid button")).toHaveCount(6);
   await expect(page.locator(".skill-downloads a")).toHaveCount(3);
@@ -99,6 +100,14 @@ test("shows every lifecycle destination in the top navigation", async ({ page })
   await navigation.getByRole("link", { name: /中标交底/ }).click();
   await expect(page).toHaveURL(/\/handover$/);
   await expect(page.locator(".lab-header nav a.active")).toHaveAccessibleName(/中标交底/);
+});
+
+test("keeps only the final project actions in the workspace toolbar", async ({ page }) => {
+  const toolbar = page.locator(".workspace-toolbar");
+  await expect(toolbar.getByRole("button", { name: "新建项目" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "项目路径" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: /示例/ })).toHaveCount(0);
+  await expect(page.getByText("本地工作区路径提示")).toHaveCount(0);
 });
 
 test("stores imported sources and generated files in the selected project folder", async ({ page }) => {

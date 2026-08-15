@@ -11,7 +11,6 @@ test("workbench remains stable across lifecycle pages", async ({ page }, testInf
     await page.evaluate(() => localStorage.clear());
     await page.reload();
     await expect(page.locator(".solution-app")).toHaveAttribute("data-ready", "true");
-    await page.getByRole("button", { name: /AI 示例|AI sample/ }).click();
     await expectNoHorizontalOverflow(page);
   }
   await page.screenshot({ path: testInfo.outputPath("solution-workbench-light.png"), fullPage: true });
@@ -25,7 +24,6 @@ test("theme and language controls preserve a dense responsive layout", async ({ 
     localStorage.setItem("cavwic-lab-theme", "light");
   });
   await page.reload();
-  await page.getByRole("button", { name: /AI 示例/ }).click();
   await page.getByRole("button", { name: /招标要求/ }).click();
   await expectNoHorizontalOverflow(page);
 

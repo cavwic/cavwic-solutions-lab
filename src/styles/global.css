@@ -102,7 +102,7 @@ textarea { padding: 11px; resize: vertical; }
 .workspace-toolbar button:hover, .command-button:hover, .output-actions button:hover, .icon-command:hover { color: #fff; border-color: var(--teal); background: var(--teal); }
 .workspace-toolbar button:disabled, .command-button:disabled, .output-actions button:disabled, .primary-export:disabled { opacity: .45; cursor: wait; }
 .workspace-toolbar span { font-size: 13px; }
-.workspace-toolbar .toolbar-spacer { margin-left: auto; }
+.workspace-toolbar .toolbar-settings-start { margin-left: auto; }
 .workspace-toolbar .project-path-command.active { color: var(--teal); border-color: var(--teal); }
 .project-path-command span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
