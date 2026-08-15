@@ -106,22 +106,34 @@ test("manages presales communication rounds and generates a referenced file", as
   await firstRound.locator(".round-needs textarea").fill("客户本轮需要响应需求 A，并保留待确认边界。");
   await firstRound.locator(".round-reference-box input[type=file]").setInputFiles({ name: "product-introduction.txt", mimeType: "text/plain", buffer: Buffer.from("产品支持审计日志和人工复核。") });
   await firstRound.getByRole("button", { name: "新增执行项" }).click();
-  await firstRound.getByLabel("执行项", { exact: true }).fill("确认接口范围");
-  await firstRound.getByLabel("项目责任人", { exact: true }).fill("解决方案负责人");
+  const firstAction = firstRound.locator(".round-action-row").first();
+  await firstAction.getByLabel("执行项", { exact: true }).fill("确认接口范围");
+  await firstAction.getByLabel("项目责任人", { exact: true }).fill("解决方案负责人");
+  await firstAction.getByLabel("时间", { exact: true }).fill("2026-09-01");
   await firstRound.locator(".reference-checks input").first().check();
   await firstRound.getByLabel("文件生成说明").fill("输出需求、建议响应、边界和后续行动。");
-  await firstRound.getByLabel("响应文件名称").fill("第一轮响应");
-  await expect(firstRound.getByLabel("响应文件格式").locator("option")).toHaveText(["Word", "PPT", "Markdown"]);
-  await firstRound.getByLabel("响应文件格式").selectOption("md");
+  await firstAction.getByLabel("响应文件名称").fill("第一轮响应");
+  await expect(firstAction.getByLabel("响应文件格式").locator("option")).toHaveText(["Word", "PPT", "Markdown"]);
+  await firstAction.getByLabel("响应文件格式").selectOption("md");
 
   await page.route("http://127.0.0.1:9000/v1/chat/completions", async (route) => {
     const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
     expect(request.messages[1].content).toContain("客户本轮需要响应需求 A");
     expect(request.messages[1].content).toContain("product-introduction.txt");
+    expect(request.messages[1].content).toContain("第一轮响应");
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 第一轮响应\n\n## 客户需求\n需求 A\n\n## 待确认项\n接口范围待确认。" } }] }) });
   });
-  await firstRound.getByRole("button", { name: "生成本轮文件" }).click();
+  await firstAction.getByRole("button", { name: "生成该项响应文件" }).click();
   await expect(firstRound.getByRole("button", { name: /第一轮响应\.md/ })).toBeVisible();
+  await expect(firstRound.getByRole("button", { name: /第一轮响应\.md/ })).toContainText("确认接口范围");
+
+  await firstRound.getByRole("button", { name: "新增执行项" }).click();
+  const secondAction = firstRound.locator(".round-action-row").nth(1);
+  await secondAction.getByLabel("响应文件名称").fill("第二项演示材料");
+  await secondAction.getByLabel("响应文件格式").selectOption("pptx");
+  await expect(firstAction.getByLabel("响应文件名称")).toHaveValue("第一轮响应");
+  await expect(firstAction.getByLabel("响应文件格式")).toHaveValue("md");
+  await expect(secondAction.getByLabel("响应文件格式")).toHaveValue("pptx");
 
   await page.getByRole("button", { name: "新增沟通节点" }).click();
   await expect(page.locator(".presales-round")).toHaveCount(2);
@@ -184,7 +196,8 @@ test("stores sources, Codex tasks, and generated files in the selected project f
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || []))
     .toContain("客户项目/workspace.json");
 
-  await page.getByRole("button", { name: "生成 Codex 任务" }).click();
+  await page.getByRole("button", { name: "新增执行项" }).click();
+  await page.locator(".round-action-row").first().getByRole("button", { name: "生成该项 Codex 任务" }).click();
   await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
     .some((path) => /客户项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/work\/codex-tasks\/presales-.+\.md$/.test(path))))
     .toBe(true);

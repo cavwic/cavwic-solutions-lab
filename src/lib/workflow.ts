@@ -7,6 +7,7 @@ import {
   type ProjectStage,
   type Requirement,
 } from "./workspace-schema";
+import { getActionResponseTarget } from "./presales-generation";
 
 export type ValidationIssue = {
   id: string;
@@ -84,6 +85,7 @@ export function validateProject(project: ProjectManifest, locale: Locale = proje
   for (const round of project.presalesRounds) {
     for (const action of round.actions) {
       if (action.status !== "done" && action.title.trim() && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的执行项“${action.title}”没有责任人。` : `Action "${action.title}" in "${round.title}" has no owner.` });
+      if (action.title.trim() && !getActionResponseTarget(round, action).name) issues.push({ id: `${action.id}-response-file`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的执行项“${action.title}”没有响应文件名称。` : `Action "${action.title}" in "${round.title}" has no response file name.` });
     }
   }
   for (const section of project.sections) {
@@ -338,7 +340,7 @@ export function localizeBuiltInProject(project: ProjectManifest, locale: Locale)
     "name", "customerAlias", "industry", "owner", "budget", "objective", "constraints",
     "title", "originalText", "normalizedText", "scoreWeight", "locator", "excerpt", "formalResponse",
     "acceptanceCriteria", "notes", "text", "purpose", "demoScope", "acceptance",
-    "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName",
+    "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName", "responseFileName",
   ]);
   const translations = new Map<string, string>();
 

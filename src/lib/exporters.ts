@@ -1,4 +1,5 @@
 import type PptxGenJS from "pptxgenjs";
+import { getActionResponseTarget } from "./presales-generation";
 import { compareBaselines, validateProject } from "./workflow";
 import { outputManifestSchema, type Locale, type ProjectManifest } from "./workspace-schema";
 import { sha256 } from "./parsers";
@@ -50,7 +51,7 @@ export function presentationMarkdown(project: ProjectManifest): string {
   const presalesHistory = project.presalesRounds.map((round) => [
     `## ${round.title} ${round.meetingAt}`,
     round.customerNeeds || "客户需求待确认",
-    round.actions.map((item) => `- ${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.status}`).join("\n"),
+    round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `- ${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.status} / ${response.name || "响应文件待定"}.${response.format}`; }).join("\n"),
     round.generatedFiles.map((file) => `- 已生成: ${file.name}`).join("\n"),
   ].filter(Boolean).join("\n\n")).join("\n\n");
   const slides = [
@@ -80,7 +81,7 @@ export function projectToMarkdown(project: ProjectManifest): string {
       `- 参考资料: ${round.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join(", ") || "无"}`,
       `- 生成要求: ${round.generationInstructions || "待填写"}`,
       `- 生成文件: ${round.generatedFiles.map((file) => file.name).join(", ") || "无"}`,
-      round.actions.map((item) => `  - [${item.status === "done" ? "x" : " "}] ${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}`).join("\n"),
+      round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `  - [${item.status === "done" ? "x" : " "}] ${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"} / ${response.name || "响应文件待定"}.${response.format}`; }).join("\n"),
     ].filter(Boolean).join("\n")).join("\n\n") || "尚无沟通记录。"}`,
     `## 招标要求响应表\n\n${project.requirements.map((item) => [
       `### ${item.title}`,
@@ -132,7 +133,7 @@ export async function projectToDocx(project: ProjectManifest): Promise<Blob> {
         new Paragraph({ text: round.title, heading: HeadingLevel.HEADING_2 }),
         new Paragraph({ text: `沟通时间：${round.meetingAt || "待确认"}` }),
         new Paragraph({ text: `客户信息及需求：${round.customerNeeds || "待确认"}` }),
-        ...round.actions.map((item) => new Paragraph({ text: `${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.status}`, bullet: { level: 0 } })),
+        ...round.actions.map((item) => { const response = getActionResponseTarget(round, item); return new Paragraph({ text: `${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"} / ${response.name || "响应文件待定"}.${response.format}`, bullet: { level: 0 } }); }),
         new Paragraph({ text: `生成文件：${round.generatedFiles.map((file) => file.name).join("、") || "无"}` }),
       ]),
       new Paragraph({ text: "招标要求响应表", heading: HeadingLevel.HEADING_1 }),
@@ -170,7 +171,7 @@ export async function projectToXlsx(project: ProjectManifest): Promise<Blob> {
     title: round.title,
     meetingAt: round.meetingAt,
     customerNeeds: round.customerNeeds,
-    actions: round.actions.map((item) => `${item.title} / ${item.owner} / ${item.status}`).join("\n"),
+    actions: round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `${item.title} / ${item.owner} / ${item.dueDate} / ${item.status} / ${response.name}.${response.format}`; }).join("\n"),
     requirements: round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
     references: round.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
     instructions: round.generationInstructions,

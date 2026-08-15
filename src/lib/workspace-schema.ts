@@ -157,6 +157,8 @@ export const presalesRoundActionSchema = z.object({
   owner: z.string(),
   dueDate: z.string(),
   status: z.enum(["open", "working", "blocked", "done"]),
+  responseFileName: z.string().optional(),
+  responseFileFormat: z.enum(["md", "docx", "pptx"]).optional(),
 });
 
 export const presalesGeneratedFileSchema = z.object({
@@ -168,6 +170,7 @@ export const presalesGeneratedFileSchema = z.object({
   model: z.string(),
   sourceId: z.string(),
   relativePath: z.string(),
+  actionId: z.string().default(""),
 });
 
 export const presalesRoundSchema = z.object({

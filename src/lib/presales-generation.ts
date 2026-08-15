@@ -1,4 +1,4 @@
-import type { Locale, PresalesRound, ProjectManifest, SourceDocument } from "./workspace-schema";
+import type { Locale, PresalesRound, PresalesRoundAction, ProjectManifest, SourceDocument } from "./workspace-schema";
 import type { ModelProvider, ModelSettings } from "./model-settings";
 
 export { DEFAULT_MODEL_SETTINGS } from "./model-settings";
@@ -9,7 +9,17 @@ function sourceText(source: SourceDocument): string {
   return `## ${source.name}\n${text.slice(0, 16000) || "(no extractable text)"}`;
 }
 
-export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRound, locale: Locale = project.locale): string {
+type ResponseFileFormat = "md" | "docx" | "pptx";
+
+export function getActionResponseTarget(round: PresalesRound, action: PresalesRoundAction): { name: string; format: ResponseFileFormat } {
+  const isFirstAction = round.actions[0]?.id === action.id;
+  return {
+    name: action.responseFileName !== undefined ? action.responseFileName.trim() : (isFirstAction ? round.outputName.trim() : ""),
+    format: action.responseFileFormat || (isFirstAction ? round.outputFormat : "docx"),
+  };
+}
+
+export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRound, locale: Locale = project.locale, targetAction?: PresalesRoundAction): string {
   const roundIndex = project.presalesRounds.findIndex((item) => item.id === round.id);
   const selectedIds = new Set([
     ...round.requirementSourceIds,
@@ -17,7 +27,10 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
   ]);
   const selectedSources = project.sources.filter((source) => selectedIds.has(source.id));
   const priorRounds = project.presalesRounds.slice(0, Math.max(0, roundIndex));
-  const actions = round.actions.map((item) => `- [${item.status}] ${item.title} / ${item.owner || "unassigned"} / ${item.dueDate || "unscheduled"}`).join("\n");
+  const actions = round.actions.map((item) => {
+    const response = getActionResponseTarget(round, item);
+    return `- [${item.status}] ${item.title} / ${item.owner || "unassigned"} / ${item.dueDate || "unscheduled"} / ${response.name || "response file pending"}.${response.format}`;
+  }).join("\n");
   const history = priorRounds.map((item) => [
     `### ${item.title} ${item.meetingAt}`,
     item.customerNeeds || "(no recorded customer need)",
@@ -25,6 +38,7 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
     item.generatedFiles.map((file) => `- generated: ${file.name}`).join("\n"),
   ].filter(Boolean).join("\n")).join("\n\n");
   const references = selectedSources.map(sourceText).join("\n\n").slice(0, 60000);
+  const target = targetAction ? getActionResponseTarget(round, targetAction) : null;
 
   if (locale === "zh") return [
     "你是企业解决方案售前负责人。只根据以下项目边界、沟通记录和已选资料编制本轮客户响应文件。",
@@ -33,6 +47,7 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
     `# 项目与边界\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n责任人：${project.owner || "待确认"}\n预算：${project.budget || "待确认"}\n截止日期：${project.deadline || "待确认"}\n业务目标：${project.objective || "待确认"}\n约束：${project.constraints || "待确认"}`,
     `# 本轮沟通\n节点：${round.title}\n时间：${round.meetingAt || "待确认"}\n客户信息及需求：\n${round.customerNeeds || "待确认"}`,
     `# 本轮执行清单\n${actions || "暂无"}`,
+    targetAction ? `# 当前响应文件\n执行项：${targetAction.title || "待填写"}\n责任人：${targetAction.owner || "待确认"}\n截止日期：${targetAction.dueDate || "待确认"}\n文件名：${target?.name || "待填写"}\n格式：${target?.format.toUpperCase()}` : "",
     `# 之前轮次\n${history || "无"}`,
     `# 已选企业资料、客户附件与模板内容\n${references || "未选择资料"}`,
     `# 文件生成要求\n${round.generationInstructions || "整理本轮需求、响应方案、边界、待确认项和后续行动。"}`,
@@ -45,6 +60,7 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
     `# Project boundary\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nOwner: ${project.owner || "To confirm"}\nBudget: ${project.budget || "To confirm"}\nDeadline: ${project.deadline || "To confirm"}\nObjective: ${project.objective || "To confirm"}\nConstraints: ${project.constraints || "To confirm"}`,
     `# Current communication\nNode: ${round.title}\nTime: ${round.meetingAt || "To confirm"}\nCustomer information and needs:\n${round.customerNeeds || "To confirm"}`,
     `# Current action list\n${actions || "None"}`,
+    targetAction ? `# Current response file\nAction: ${targetAction.title || "To confirm"}\nOwner: ${targetAction.owner || "To confirm"}\nDue date: ${targetAction.dueDate || "To confirm"}\nFile name: ${target?.name || "To confirm"}\nFormat: ${target?.format.toUpperCase()}` : "",
     `# Previous rounds\n${history || "None"}`,
     `# Selected company materials, customer attachments, and template content\n${references || "No sources selected"}`,
     `# Generation instructions\n${round.generationInstructions || "Summarize the need, proposed response, boundaries, open questions, and next actions."}`,
@@ -84,17 +100,18 @@ export async function requestPresalesDraft(
   return { content, model: model.trim(), provider: settings.provider };
 }
 
-export function safeGeneratedFileName(name: string, format: PresalesRound["outputFormat"]): string {
+export function safeGeneratedFileName(name: string, format: ResponseFileFormat): string {
   const stem = name.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").slice(0, 72) || "presales-response";
   return `${stem}.${format}`;
 }
 
-export function buildCodexPresalesTask(project: ProjectManifest, round: PresalesRound, locale: Locale = project.locale): { name: string; content: string; outputName: string } {
-  const outputName = safeGeneratedFileName(round.outputName, round.outputFormat);
+export function buildCodexPresalesTask(project: ProjectManifest, round: PresalesRound, action: PresalesRoundAction, locale: Locale = project.locale): { name: string; content: string; outputName: string } {
+  const target = getActionResponseTarget(round, action);
+  const outputName = safeGeneratedFileName(target.name, target.format);
   const taskStem = outputName.replace(/\.[^.]+$/, "");
-  const taskName = `presales-${round.id}-${taskStem}.md`.replace(/[\\/:*?"<>|]+/g, "-");
-  const prompt = buildPresalesPrompt(project, round, locale);
-  const sourceLocator = round.outputFormat === "pptx" ? "slide" : round.outputFormat === "docx" ? "paragraph" : "line";
+  const taskName = `presales-${round.id}-${action.id}-${taskStem}.md`.replace(/[\\/:*?"<>|]+/g, "-");
+  const prompt = buildPresalesPrompt(project, round, locale, action);
+  const sourceLocator = target.format === "pptx" ? "slide" : target.format === "docx" ? "paragraph" : "line";
 
   if (locale === "zh") return {
     name: taskName,
@@ -111,10 +128,10 @@ export function buildCodexPresalesTask(project: ProjectManifest, round: Presales
       `- 项目清单：projects/${project.id}/project.json`,
       "",
       "## 执行要求",
-      `1. 根据下方任务正文生成 ${round.outputFormat.toUpperCase()} 文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。`,
+      `1. 根据下方任务正文生成 ${target.format.toUpperCase()} 文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。`,
       "2. 只使用任务正文和项目目录中的资料。缺少依据的参数、案例、价格、资质和承诺一律标为待确认。",
       "3. 生成后计算输出文件 SHA-256，在 project.json 的 sources 中增加对应来源记录；fileType 使用输出格式，segments 至少保留一条可定位摘要。",
-      `4. 在本轮 generatedFiles 中增加记录：provider 为 codex，model 写实际使用的 Codex 模型，relativePath 为 projects/${project.id}/outputs/${outputName}。`,
+      `4. 在本轮 generatedFiles 中增加记录：actionId 为 ${action.id}，provider 为 codex，model 写实际使用的 Codex 模型，relativePath 为 projects/${project.id}/outputs/${outputName}。`,
       "5. 更新 project.json 的 updatedAt，并用项目现有 Zod 结构或测试校验。不得删除其他轮次或用户已有数据。",
       `6. 来源片段的 locatorKind 使用 ${sourceLocator}。完成后报告输出路径、校验结果和仍需人工确认的事项。`,
       "",
@@ -141,10 +158,10 @@ export function buildCodexPresalesTask(project: ProjectManifest, round: Presales
       `- Manifest: projects/${project.id}/project.json`,
       "",
       "## Execution requirements",
-      `1. Generate a ${round.outputFormat.toUpperCase()} file from the task body below. Use document or presentation tooling when formatting and visual QA are required.`,
+      `1. Generate a ${target.format.toUpperCase()} file from the task body below. Use document or presentation tooling when formatting and visual QA are required.`,
       "2. Use only the task body and files in the project folder. Mark unsupported parameters, references, prices, qualifications, and commitments as To confirm.",
       "3. Calculate the output SHA-256 and append a matching source record to project.json. Use the output format as fileType and preserve at least one locatable summary segment.",
-      `4. Append a generatedFiles record to this round with provider codex, the actual Codex model name, and relativePath projects/${project.id}/outputs/${outputName}.`,
+      `4. Append a generatedFiles record to this round with actionId ${action.id}, provider codex, the actual Codex model name, and relativePath projects/${project.id}/outputs/${outputName}.`,
       "5. Update project.json updatedAt and validate it against the existing Zod schema or tests. Preserve every existing round and user-authored field.",
       `6. Use ${sourceLocator} as locatorKind for the output summary. Report the output path, validation result, and every item still requiring human review.`,
       "",
@@ -208,7 +225,7 @@ async function markdownToPptx(markdown: string, title: string): Promise<Blob> {
   return new Blob([buffer as ArrayBuffer], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
 }
 
-export async function createGeneratedFile(markdown: string, name: string, format: PresalesRound["outputFormat"]): Promise<{ name: string; blob: Blob }> {
+export async function createGeneratedFile(markdown: string, name: string, format: ResponseFileFormat): Promise<{ name: string; blob: Blob }> {
   const fileName = safeGeneratedFileName(name, format);
   if (format === "md") return { name: fileName, blob: new Blob([markdown], { type: "text/markdown;charset=utf-8" }) };
   if (format === "docx") return { name: fileName, blob: await markdownToDocx(markdown) };

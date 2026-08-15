@@ -33,13 +33,16 @@ describe("presales generation", () => {
 
   it("builds a Codex task that writes output and metadata back to the project", () => {
     const project = createEmptyProject("zh");
-    project.presalesRounds[0].customerNeeds = "生成客户响应文件";
-    project.presalesRounds[0].outputName = "第一轮响应";
-    const task = buildCodexPresalesTask(project, project.presalesRounds[0]);
+    const round = project.presalesRounds[0];
+    round.customerNeeds = "生成客户响应文件";
+    const action = { id: "action-1", title: "确认接口范围", owner: "方案负责人", dueDate: "2026-09-01", status: "open" as const, responseFileName: "第一轮响应", responseFileFormat: "docx" as const };
+    round.actions = [action];
+    const task = buildCodexPresalesTask(project, round, action);
     expect(task.name).toMatch(/^presales-.+\.md$/);
     expect(task.outputName).toBe("第一轮响应.docx");
     expect(task.content).toContain(`projects/${project.id}/outputs/第一轮响应.docx`);
     expect(task.content).toContain("provider 为 codex");
+    expect(task.content).toContain("actionId 为 action-1");
     expect(task.content).toContain("生成客户响应文件");
   });
 
