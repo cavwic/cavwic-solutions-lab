@@ -1,22 +1,8 @@
 import type { Locale, PresalesRound, ProjectManifest, SourceDocument } from "./workspace-schema";
+import type { ModelProvider, ModelSettings } from "./model-settings";
 
-export type ModelProvider = "local" | "cloud";
-
-export type ModelSettings = {
-  provider: ModelProvider;
-  localEndpoint: string;
-  localModel: string;
-  cloudEndpoint: string;
-  cloudModel: string;
-};
-
-export const DEFAULT_MODEL_SETTINGS: ModelSettings = {
-  provider: "local",
-  localEndpoint: "http://127.0.0.1:11434/v1/chat/completions",
-  localModel: "",
-  cloudEndpoint: "",
-  cloudModel: "",
-};
+export { DEFAULT_MODEL_SETTINGS } from "./model-settings";
+export type { ModelProvider, ModelSettings } from "./model-settings";
 
 function sourceText(source: SourceDocument): string {
   const text = source.segments.map((segment) => `[${segment.locator}] ${segment.text}`).join("\n");
@@ -71,6 +57,7 @@ export async function requestPresalesDraft(
   prompt: string,
   fetcher: typeof fetch = fetch,
 ): Promise<{ content: string; model: string; provider: ModelProvider }> {
+  if (settings.provider === "codex") throw new Error("CODEX_WORKFLOW_SELECTED");
   const endpoint = settings.provider === "local" ? settings.localEndpoint : settings.cloudEndpoint;
   const model = settings.provider === "local" ? settings.localModel : settings.cloudModel;
   if (!endpoint.trim()) throw new Error("MODEL_ENDPOINT_REQUIRED");
@@ -100,6 +87,74 @@ export async function requestPresalesDraft(
 export function safeGeneratedFileName(name: string, format: PresalesRound["outputFormat"]): string {
   const stem = name.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").slice(0, 72) || "presales-response";
   return `${stem}.${format}`;
+}
+
+export function buildCodexPresalesTask(project: ProjectManifest, round: PresalesRound, locale: Locale = project.locale): { name: string; content: string; outputName: string } {
+  const outputName = safeGeneratedFileName(round.outputName, round.outputFormat);
+  const taskStem = outputName.replace(/\.[^.]+$/, "");
+  const taskName = `presales-${round.id}-${taskStem}.md`.replace(/[\\/:*?"<>|]+/g, "-");
+  const prompt = buildPresalesPrompt(project, round, locale);
+  const sourceLocator = round.outputFormat === "pptx" ? "slide" : round.outputFormat === "docx" ? "paragraph" : "line";
+
+  if (locale === "zh") return {
+    name: taskName,
+    outputName,
+    content: [
+      `# Codex 文件生成任务：${round.title}`,
+      "",
+      "在当前工作区内执行本任务。不要上传原始资料，不要把演练内容写成真实客户事实。",
+      "",
+      "## 路径",
+      `- 项目：projects/${project.id}`,
+      `- 输入资料：projects/${project.id}/sources`,
+      `- 输出文件：projects/${project.id}/outputs/${outputName}`,
+      `- 项目清单：projects/${project.id}/project.json`,
+      "",
+      "## 执行要求",
+      `1. 根据下方任务正文生成 ${round.outputFormat.toUpperCase()} 文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。`,
+      "2. 只使用任务正文和项目目录中的资料。缺少依据的参数、案例、价格、资质和承诺一律标为待确认。",
+      "3. 生成后计算输出文件 SHA-256，在 project.json 的 sources 中增加对应来源记录；fileType 使用输出格式，segments 至少保留一条可定位摘要。",
+      `4. 在本轮 generatedFiles 中增加记录：provider 为 codex，model 写实际使用的 Codex 模型，relativePath 为 projects/${project.id}/outputs/${outputName}。`,
+      "5. 更新 project.json 的 updatedAt，并用项目现有 Zod 结构或测试校验。不得删除其他轮次或用户已有数据。",
+      `6. 来源片段的 locatorKind 使用 ${sourceLocator}。完成后报告输出路径、校验结果和仍需人工确认的事项。`,
+      "",
+      "## 任务正文",
+      "```text",
+      prompt,
+      "```",
+      "",
+    ].join("\n"),
+  };
+
+  return {
+    name: taskName,
+    outputName,
+    content: [
+      `# Codex file generation task: ${round.title}`,
+      "",
+      "Run this task inside the current workspace. Do not upload source files or present practice material as a real customer fact.",
+      "",
+      "## Paths",
+      `- Project: projects/${project.id}`,
+      `- Inputs: projects/${project.id}/sources`,
+      `- Output: projects/${project.id}/outputs/${outputName}`,
+      `- Manifest: projects/${project.id}/project.json`,
+      "",
+      "## Execution requirements",
+      `1. Generate a ${round.outputFormat.toUpperCase()} file from the task body below. Use document or presentation tooling when formatting and visual QA are required.`,
+      "2. Use only the task body and files in the project folder. Mark unsupported parameters, references, prices, qualifications, and commitments as To confirm.",
+      "3. Calculate the output SHA-256 and append a matching source record to project.json. Use the output format as fileType and preserve at least one locatable summary segment.",
+      `4. Append a generatedFiles record to this round with provider codex, the actual Codex model name, and relativePath projects/${project.id}/outputs/${outputName}.`,
+      "5. Update project.json updatedAt and validate it against the existing Zod schema or tests. Preserve every existing round and user-authored field.",
+      `6. Use ${sourceLocator} as locatorKind for the output summary. Report the output path, validation result, and every item still requiring human review.`,
+      "",
+      "## Task body",
+      "```text",
+      prompt,
+      "```",
+      "",
+    ].join("\n"),
+  };
 }
 
 function markdownLines(markdown: string): Array<{ kind: "heading" | "body" | "bullet"; text: string; level: number }> {

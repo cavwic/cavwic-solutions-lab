@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, requestPresalesDraft, safeGeneratedFileName } from "./presales-generation";
+import { buildCodexPresalesTask, buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, requestPresalesDraft, safeGeneratedFileName } from "./presales-generation";
 import { createEmptyProject } from "./workspace-schema";
 
 describe("presales generation", () => {
@@ -21,7 +21,7 @@ describe("presales generation", () => {
       capturedInit = init;
       return new Response(JSON.stringify({ choices: [{ message: { content: "# 响应文件" } }] }), { status: 200 });
     });
-    const result = await requestPresalesDraft({ ...DEFAULT_MODEL_SETTINGS, localModel: "local-model" }, "", "prompt", fetchMock as typeof fetch);
+    const result = await requestPresalesDraft({ ...DEFAULT_MODEL_SETTINGS, provider: "local", localEndpoint: "http://127.0.0.1:9000/v1/chat/completions", localModel: "local-model" }, "", "prompt", fetchMock as typeof fetch);
     expect(result.content).toBe("# 响应文件");
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(JSON.parse(String(capturedInit?.body)).model).toBe("local-model");
@@ -29,6 +29,18 @@ describe("presales generation", () => {
 
   it("sanitizes generated file names", () => {
     expect(safeGeneratedFileName("客户/响应:第一版", "docx")).toBe("客户-响应-第一版.docx");
+  });
+
+  it("builds a Codex task that writes output and metadata back to the project", () => {
+    const project = createEmptyProject("zh");
+    project.presalesRounds[0].customerNeeds = "生成客户响应文件";
+    project.presalesRounds[0].outputName = "第一轮响应";
+    const task = buildCodexPresalesTask(project, project.presalesRounds[0]);
+    expect(task.name).toMatch(/^presales-.+\.md$/);
+    expect(task.outputName).toBe("第一轮响应.docx");
+    expect(task.content).toContain(`projects/${project.id}/outputs/第一轮响应.docx`);
+    expect(task.content).toContain("provider 为 codex");
+    expect(task.content).toContain("生成客户响应文件");
   });
 
   it("creates a downloadable Markdown file", async () => {

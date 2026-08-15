@@ -1,10 +1,8 @@
 import {
   AlertTriangle,
   Archive,
-  Bot,
   BookOpenCheck,
   BriefcaseBusiness,
-  Building2,
   Check,
   ChevronRight,
   ClipboardCheck,
@@ -47,12 +45,17 @@ import {
 } from "../lib/exporters";
 import { parseSourceFile } from "../lib/parsers";
 import {
+  buildCodexPresalesTask,
   buildPresalesPrompt,
   createGeneratedFile,
-  DEFAULT_MODEL_SETTINGS,
   requestPresalesDraft,
   type ModelSettings,
 } from "../lib/presales-generation";
+import {
+  MODEL_SETTINGS_CHANGED_EVENT,
+  readModelApiKey,
+  readModelSettings,
+} from "../lib/model-settings";
 import {
   chooseWorkspaceDirectory,
   importProjectArchive,
@@ -60,6 +63,7 @@ import {
   persistWorkspaceDirectory,
   readGeneratedFileFromDirectory,
   restoreWorkspaceDirectory,
+  saveCodexTaskToDirectory,
   saveGeneratedFileToDirectory,
   saveProjectStateToDirectory,
   saveProjectToDirectory,
@@ -324,31 +328,6 @@ function downloadText(name: string, content: string, type: string): void {
   downloadBlob(name, new Blob([content], { type }));
 }
 
-function firstText(record: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
-  }
-  return "";
-}
-
-async function enterpriseProjectPatch(file: File): Promise<Partial<Pick<ProjectManifest, "customerAlias" | "industry" | "owner" | "budget" | "deadline" | "objective" | "constraints">> & { companyName?: string; platform?: string }> {
-  if (!file.name.toLowerCase().endsWith(".json")) return {};
-  const payload = JSON.parse(await file.text()) as Record<string, unknown>;
-  const record = payload.project && typeof payload.project === "object" ? payload.project as Record<string, unknown> : payload;
-  return {
-    customerAlias: firstText(record, ["customerAlias", "customer", "customerName", "客户代称", "客户名称"]),
-    industry: firstText(record, ["industry", "行业"]),
-    owner: firstText(record, ["owner", "projectOwner", "项目责任人"]),
-    budget: firstText(record, ["budget", "预算"]),
-    deadline: firstText(record, ["deadline", "targetDate", "计划截止日期"]),
-    objective: firstText(record, ["objective", "businessObjective", "业务目标"]),
-    constraints: firstText(record, ["constraints", "boundaries", "约束", "边界"]),
-    companyName: firstText(record, ["companyName", "company", "企业名称"]),
-    platform: firstText(record, ["platform", "sourcePlatform", "来源平台"]),
-  };
-}
-
 function Field({ label, children, wide = false }: { label: string; children: React.ReactNode; wide?: boolean }) {
   return <label className={wide ? "field wide" : "field"}><span>{label}</span>{children}</label>;
 }
@@ -368,11 +347,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [taskKind, setTaskKind] = useState<"workflow" | "extract" | "bid">("workflow");
   const [sourceFiles, setSourceFiles] = useState<Map<string, File>>(new Map());
   const [generatedBlobs, setGeneratedBlobs] = useState<Map<string, Blob>>(new Map());
-  const [modelSettings, setModelSettings] = useState<ModelSettings>(DEFAULT_MODEL_SETTINGS);
+  const [modelSettings, setModelSettings] = useState<ModelSettings>(() => readModelSettings());
   const [apiKey, setApiKey] = useState("");
   const [generatingRoundId, setGeneratingRoundId] = useState("");
   const sourceInput = useRef<HTMLInputElement>(null);
-  const enterpriseInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
   const t = copy[locale];
   const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -395,12 +373,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     document.documentElement.dataset.locale = nextLocale;
     document.documentElement.lang = nextLocale === "zh" ? "zh-CN" : "en";
     document.documentElement.dataset.theme = nextTheme;
-    const storedModelSettings = localStorage.getItem("cavwic-lab-model-settings");
-    if (storedModelSettings) {
-      try { setModelSettings({ ...DEFAULT_MODEL_SETTINGS, ...JSON.parse(storedModelSettings) }); }
-      catch { setModelSettings(DEFAULT_MODEL_SETTINGS); }
-    }
-    setApiKey(sessionStorage.getItem("cavwic-lab-api-key") || "");
+    setModelSettings(readModelSettings());
+    setApiKey(readModelApiKey());
     const stored = localStorage.getItem("cavwic-solution-workspace");
     if (stored) {
       const parsed = projectManifestSchema.safeParse(JSON.parse(stored));
@@ -413,15 +387,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
-    localStorage.setItem("cavwic-lab-model-settings", JSON.stringify(modelSettings));
-  }, [modelSettings, ready]);
-
-  useEffect(() => {
-    if (!ready) return;
-    if (apiKey) sessionStorage.setItem("cavwic-lab-api-key", apiKey);
-    else sessionStorage.removeItem("cavwic-lab-api-key");
-  }, [apiKey, ready]);
+    const syncModelSettings = () => {
+      setModelSettings(readModelSettings());
+      setApiKey(readModelApiKey());
+    };
+    window.addEventListener(MODEL_SETTINGS_CHANGED_EVENT, syncModelSettings);
+    return () => window.removeEventListener(MODEL_SETTINGS_CHANGED_EVENT, syncModelSettings);
+  }, []);
 
   useEffect(() => {
     if (!ready) return;
@@ -492,33 +464,23 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   };
 
-  const importPresalesFiles = async (files: FileList | null, target: { kind: "enterprise" } | { kind: "requirements" | "references"; roundId: string }) => {
+  const importPresalesFiles = async (files: FileList | null, target: { kind: "requirements" | "references"; roundId: string }) => {
     if (!files?.length) return;
     setBusy(true);
     setNotice(`${t.parsing}…`);
     try {
       const parsed = [];
       const nextFiles = new Map(sourceFiles);
-      let enterprisePatch: Awaited<ReturnType<typeof enterpriseProjectPatch>> = {};
       for (const file of Array.from(files)) {
         const source = await parseSourceFile(file);
         parsed.push(source);
         nextFiles.set(source.id, file);
-        if (target.kind === "enterprise") enterprisePatch = { ...enterprisePatch, ...await enterpriseProjectPatch(file) };
       }
       const sourceIds = parsed.map((source) => source.id);
       const nextProject = syncProjectStage({
         ...project,
-        ...(target.kind === "enterprise" ? Object.fromEntries(Object.entries(enterprisePatch).filter(([key, value]) => !["companyName", "platform"].includes(key) && value)) : {}),
         sources: [...project.sources, ...parsed],
-        enterpriseContext: target.kind === "enterprise" ? {
-          ...project.enterpriseContext,
-          companyName: enterprisePatch.companyName || project.enterpriseContext.companyName,
-          platform: enterprisePatch.platform || project.enterpriseContext.platform || "file-import",
-          importedAt: new Date().toISOString(),
-          sourceIds: [...new Set([...project.enterpriseContext.sourceIds, ...sourceIds])],
-        } : project.enterpriseContext,
-        presalesRounds: target.kind === "enterprise" ? project.presalesRounds : project.presalesRounds.map((round) => round.id === target.roundId ? {
+        presalesRounds: project.presalesRounds.map((round) => round.id === target.roundId ? {
           ...round,
           [target.kind === "requirements" ? "requirementSourceIds" : "referenceSourceIds"]: [...new Set([...(target.kind === "requirements" ? round.requirementSourceIds : round.referenceSourceIds), ...sourceIds])],
         } : round),
@@ -532,7 +494,6 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       setNotice(t.invalid);
     } finally {
       setBusy(false);
-      if (enterpriseInput.current) enterpriseInput.current.value = "";
     }
   };
 
@@ -550,6 +511,17 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     try {
       const prompt = buildPresalesPrompt(project, round, locale);
+      if (modelSettings.provider === "codex") {
+        const task = buildCodexPresalesTask(project, round, locale);
+        if (directoryHandle) {
+          const relativePath = await saveCodexTaskToDirectory(directoryHandle, project, task.name, task.content);
+          setNotice(locale === "zh" ? `Codex 任务已写入 ${relativePath}。请在 Codex 中执行，再到“输出与 Skills”重新扫描。` : `Codex task written to ${relativePath}. Run it in Codex, then rescan under Outputs and Skills.`);
+        } else {
+          downloadText(task.name, task.content, "text/markdown;charset=utf-8");
+          setNotice(locale === "zh" ? "Codex 任务已下载。建议先选择项目路径，以便 Codex 将结果写回同一项目。" : "Codex task downloaded. Choose a project folder first so Codex can write the result back to the same project.");
+        }
+        return;
+      }
       const draft = await requestPresalesDraft(modelSettings, apiKey, prompt);
       const generated = await createGeneratedFile(draft.content, round.outputName, round.outputFormat);
       const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
@@ -718,11 +690,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const renderProjectContext = () => <section className="work-section">
     <div className="section-heading">
       <div><p>{t.projectEyebrow}</p><h2>{t.projectContext}</h2></div>
-      <div className="section-heading-actions">
-        <span>{project.schemaVersion}</span>
-        <button className="command-button" type="button" disabled={busy} onClick={() => enterpriseInput.current?.click()}><Building2 size={17}/>{locale === "zh" ? "导入企业信息" : "Import enterprise data"}</button>
-        <input ref={enterpriseInput} hidden multiple type="file" accept=".json,.csv,.xlsx" onChange={(event) => void importPresalesFiles(event.target.files, { kind: "enterprise" })}/>
-      </div>
+      <span>{project.schemaVersion}</span>
     </div>
     <div className="field-grid">
       <Field label={t.projectName}><input value={project.name} onChange={(event) => updateProject("name", event.target.value)} /></Field>
@@ -734,41 +702,17 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <Field label={t.objective} wide><textarea rows={4} value={project.objective} onChange={(event) => updateProject("objective", event.target.value)} /></Field>
       <Field label={t.constraints} wide><textarea rows={4} value={project.constraints} onChange={(event) => updateProject("constraints", event.target.value)} /></Field>
     </div>
-    {project.enterpriseContext.sourceIds.length > 0 && <div className="source-strip"><strong>{locale === "zh" ? "企业信息来源" : "Enterprise sources"}</strong>{project.enterpriseContext.sourceIds.map((sourceId) => <span key={sourceId}>{project.sources.find((source) => source.id === sourceId)?.name || sourceId}</span>)}</div>}
   </section>;
 
   const renderPresales = () => <>
     {renderProjectContext()}
-    <section className="work-section">
-      <div className="section-heading">
-        <div><p>{locale === "zh" ? "模型 / 文件生成" : "MODEL / FILE GENERATION"}</p><h2>{locale === "zh" ? "生成设置" : "Generation settings"}</h2></div>
-        <span>{modelSettings.provider === "local" ? (locale === "zh" ? "本地优先" : "Local first") : (locale === "zh" ? "云端接口" : "Cloud endpoint")}</span>
-      </div>
-      <details className="model-settings">
-        <summary><Bot size={19}/><strong>{locale === "zh" ? "模型与 API 配置" : "Model and API configuration"}</strong><ChevronRight size={17}/></summary>
-        <div className="model-settings-body">
-          <div className="provider-toggle" role="group" aria-label={locale === "zh" ? "模型来源" : "Model provider"}>
-            <button type="button" className={modelSettings.provider === "local" ? "active" : ""} onClick={() => setModelSettings((current) => ({ ...current, provider: "local" }))}>{locale === "zh" ? "本地模型" : "Local model"}</button>
-            <button type="button" className={modelSettings.provider === "cloud" ? "active" : ""} onClick={() => setModelSettings((current) => ({ ...current, provider: "cloud" }))}>{locale === "zh" ? "云模型 / API" : "Cloud model / API"}</button>
-          </div>
-          {modelSettings.provider === "local" ? <div className="model-field-grid">
-            <Field label={locale === "zh" ? "本地接口地址" : "Local endpoint"}><input value={modelSettings.localEndpoint} onChange={(event) => setModelSettings((current) => ({ ...current, localEndpoint: event.target.value }))}/></Field>
-            <Field label={locale === "zh" ? "本地模型名称" : "Local model name"}><input placeholder={locale === "zh" ? "填写本机已安装模型" : "Enter an installed model"} value={modelSettings.localModel} onChange={(event) => setModelSettings((current) => ({ ...current, localModel: event.target.value }))}/></Field>
-          </div> : <div className="model-field-grid">
-            <Field label={locale === "zh" ? "云端 Chat Completions 地址" : "Cloud Chat Completions endpoint"}><input placeholder="https://.../v1/chat/completions" value={modelSettings.cloudEndpoint} onChange={(event) => setModelSettings((current) => ({ ...current, cloudEndpoint: event.target.value }))}/></Field>
-            <Field label={locale === "zh" ? "云端模型名称" : "Cloud model name"}><input value={modelSettings.cloudModel} onChange={(event) => setModelSettings((current) => ({ ...current, cloudModel: event.target.value }))}/></Field>
-            <Field label={locale === "zh" ? "API Key（仅当前会话）" : "API key (current session only)"} wide><input type="password" autoComplete="off" value={apiKey} onChange={(event) => setApiKey(event.target.value)}/></Field>
-          </div>}
-        </div>
-      </details>
-    </section>
     <section className="work-section">
       <div className="section-heading"><div><p>{t.meetingEyebrow}</p><h2>{locale === "zh" ? "客户沟通与文件响应" : "Customer communications and file responses"}</h2></div><button className="icon-command" type="button" onClick={() => updateProject("presalesRounds", [...project.presalesRounds, createPresalesRound(locale, project.presalesRounds.length + 1)])} title={locale === "zh" ? "新增沟通节点" : "Add communication node"} aria-label={locale === "zh" ? "新增沟通节点" : "Add communication node"}><Plus size={18}/></button></div>
       <div className="presales-rounds">
         <div className="presales-round-head"><span>{locale === "zh" ? "沟通节点" : "Communication"}</span><span>{locale === "zh" ? "客户信息及需求" : "Customer information and needs"}</span><span>{locale === "zh" ? "执行清单与生成要求" : "Actions and generation request"}</span><span>{locale === "zh" ? "生成文件列表" : "Generated files"}</span></div>
         {project.presalesRounds.map((round, roundIndex) => {
           const priorGeneratedIds = project.presalesRounds.slice(0, roundIndex + 1).flatMap((item) => item.generatedFiles.map((file) => file.sourceId));
-          const candidateIds = [...new Set([...project.enterpriseContext.sourceIds, ...priorGeneratedIds, ...round.referenceSourceIds])];
+          const candidateIds = [...new Set([...priorGeneratedIds, ...round.referenceSourceIds])];
           const referenceCandidates = candidateIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
           return <article className="presales-round" key={round.id}>
             <div className="round-node">
@@ -800,7 +744,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
               </div>
               <textarea rows={5} aria-label={locale === "zh" ? "文件生成说明" : "File generation instructions"} placeholder={locale === "zh" ? "说明文件用途、结构、重点、语气、需继承的内容以及不得承诺的事项" : "Describe purpose, structure, priorities, tone, inherited content, and prohibited commitments"} value={round.generationInstructions} onChange={(event) => updatePresalesRound(round.id, { generationInstructions: event.target.value })}/>
               <div className="generation-file-row"><input aria-label={locale === "zh" ? "输出文件名" : "Output file name"} value={round.outputName} onChange={(event) => updatePresalesRound(round.id, { outputName: event.target.value })}/><select aria-label={locale === "zh" ? "输出格式" : "Output format"} value={round.outputFormat} onChange={(event) => updatePresalesRound(round.id, { outputFormat: event.target.value as PresalesRound["outputFormat"] })}><option value="docx">Word</option><option value="pptx">PowerPoint</option><option value="md">Markdown</option></select></div>
-              <button className="generate-command" type="button" disabled={busy} onClick={() => void generatePresalesFile(round)}><Sparkles size={17}/>{generatingRoundId === round.id ? (locale === "zh" ? "正在生成" : "Generating") : (locale === "zh" ? "生成本轮文件" : "Generate file")}</button>
+              <button className="generate-command" type="button" disabled={busy} onClick={() => void generatePresalesFile(round)}><Sparkles size={17}/>{generatingRoundId === round.id ? (locale === "zh" ? "正在生成" : "Generating") : modelSettings.provider === "codex" ? (locale === "zh" ? "生成 Codex 任务" : "Create Codex task") : (locale === "zh" ? "生成本轮文件" : "Generate file")}</button>
             </div>
             <div className="round-outputs">
               <span className="round-cell-label">{locale === "zh" ? "生成文件列表" : "Generated files"}</span>

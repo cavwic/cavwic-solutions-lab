@@ -135,6 +135,15 @@ export async function saveGeneratedFileToDirectory(handle: DirectoryHandleLike, 
   await writeFile(outputs, name, content);
 }
 
+export async function saveCodexTaskToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, name: string, content: string): Promise<string> {
+  await ensureWritePermission(handle);
+  const projectDirectory = await getProjectDirectory(handle, project);
+  const work = await projectDirectory.getDirectoryHandle("work", { create: true });
+  const tasks = await work.getDirectoryHandle("codex-tasks", { create: true });
+  await writeFile(tasks, name, content);
+  return `projects/${project.id}/work/codex-tasks/${name}`;
+}
+
 export async function readGeneratedFileFromDirectory(handle: DirectoryHandleLike, project: ProjectManifest, name: string): Promise<File> {
   const projectDirectory = await getProjectDirectory(handle, project);
   const outputs = await projectDirectory.getDirectoryHandle("outputs");

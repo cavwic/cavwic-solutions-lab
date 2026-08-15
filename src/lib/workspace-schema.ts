@@ -164,7 +164,7 @@ export const presalesGeneratedFileSchema = z.object({
   name: z.string().min(1),
   format: z.enum(["md", "docx", "pptx"]),
   createdAt: z.string(),
-  provider: z.enum(["local", "cloud"]),
+  provider: z.enum(["codex", "local", "cloud"]),
   model: z.string(),
   sourceId: z.string(),
   relativePath: z.string(),

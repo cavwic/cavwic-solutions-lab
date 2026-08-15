@@ -1,5 +1,5 @@
 ---
-import { ClipboardCheck, FileOutput, FileSearch, House, PackageCheck } from "@lucide/astro";
+import { Settings2 } from "@lucide/astro";
 import "../styles/global.css";
 const { title, titleZh = title, titleEn = title, current } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -30,12 +30,8 @@ const href = (path: string) => `${base}${path}`;
   <body>
     <header class="lab-header">
       <a class="lab-brand" href={href("/")}><span>C</span><strong>CAVWIC SOLUTIONS LAB</strong></a>
-      <nav aria-label="解决方案工作台 / Solution workbenches">
-        <a class:list={{ active: current === "home" }} href={href("/")} aria-label="工作台 / Workbench"><House size={18}/><span data-i18n="zh">工作台</span><span data-i18n="en">Workbench</span></a>
-        <a class:list={{ active: current === "requirements" }} href={href("/requirements")} aria-label="招标要求 / Tender requirements"><FileSearch size={18}/><span data-i18n="zh">招标要求</span><span data-i18n="en">Requirements</span></a>
-        <a class:list={{ active: current === "bid" }} href={href("/bid-package")} aria-label="技术标组包 / Technical bid package"><PackageCheck size={18}/><span data-i18n="zh">技术标组包</span><span data-i18n="en">Bid package</span></a>
-        <a class:list={{ active: current === "handover" }} href={href("/handover")} aria-label="中标交底 / Award handover"><ClipboardCheck size={18}/><span data-i18n="zh">中标交底</span><span data-i18n="en">Handover</span></a>
-        <a class:list={{ active: current === "outputs" }} href={href("/outputs")} aria-label="输出与 Skills / Outputs and Skills"><FileOutput size={18}/><span data-i18n="zh">输出与 Skills</span><span data-i18n="en">Outputs</span></a>
+      <nav aria-label="全局设置 / Global settings">
+        <a class:list={{ active: current === "model" }} href={href("/model-settings")} aria-label="模型配置 / Model configuration"><Settings2 size={18}/><span data-i18n="zh">模型配置</span><span data-i18n="en">Model configuration</span></a>
       </nav>
     </header>
     <main><slot/></main>

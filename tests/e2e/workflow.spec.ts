@@ -92,17 +92,19 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
 });
 
 test("manages presales communication rounds and generates a referenced file", async ({ page }) => {
-  await page.locator('input[accept=".json,.csv,.xlsx"]').setInputFiles({
-    name: "crm-project.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify({ customerAlias: "客户 A", industry: "企业 AI", objective: "形成可审阅的售前响应", companyName: "示例企业平台", platform: "CRM export" })),
-  });
-  await expect(page.getByLabel("客户代称")).toHaveValue("客户 A");
-  await expect(page.locator(".source-strip").getByText("crm-project.json")).toBeVisible();
+  await expect(page.getByRole("button", { name: "导入企业信息" })).toHaveCount(0);
   await expect(page.getByText("POC 与定制演示")).toHaveCount(0);
+
+  await page.getByRole("link", { name: /模型配置/ }).click();
+  await page.getByRole("button", { name: "本机或内网接口" }).click();
+  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9000/v1/chat/completions");
+  await page.getByLabel("模型名称").fill("test-compatible-model");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await page.getByRole("link", { name: "返回工作台" }).click();
 
   const firstRound = page.locator(".presales-round").first();
   await firstRound.locator(".round-needs textarea").fill("客户本轮需要响应需求 A，并保留待确认边界。");
+  await firstRound.locator(".round-reference-box input[type=file]").setInputFiles({ name: "product-introduction.txt", mimeType: "text/plain", buffer: Buffer.from("产品支持审计日志和人工复核。") });
   await firstRound.getByRole("button", { name: "新增执行项" }).click();
   await firstRound.getByLabel("执行项", { exact: true }).fill("确认接口范围");
   await firstRound.getByLabel("项目责任人", { exact: true }).fill("解决方案负责人");
@@ -111,12 +113,10 @@ test("manages presales communication rounds and generates a referenced file", as
   await firstRound.getByLabel("输出文件名").fill("第一轮响应");
   await firstRound.getByLabel("输出格式").selectOption("md");
 
-  await page.locator(".model-settings summary").click();
-  await page.getByLabel("本地模型名称").fill("test-local-model");
-  await page.route("http://127.0.0.1:11434/v1/chat/completions", async (route) => {
+  await page.route("http://127.0.0.1:9000/v1/chat/completions", async (route) => {
     const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
     expect(request.messages[1].content).toContain("客户本轮需要响应需求 A");
-    expect(request.messages[1].content).toContain("crm-project.json");
+    expect(request.messages[1].content).toContain("product-introduction.txt");
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 第一轮响应\n\n## 客户需求\n需求 A\n\n## 待确认项\n接口范围待确认。" } }] }) });
   });
   await firstRound.getByRole("button", { name: "生成本轮文件" }).click();
@@ -129,15 +129,17 @@ test("manages presales communication rounds and generates a referenced file", as
   await expect(page.locator(".presales-round")).toHaveCount(1);
 });
 
-test("shows every lifecycle destination in the top navigation", async ({ page }) => {
+test("uses one global model link in the header and keeps lifecycle navigation in the workbench", async ({ page }) => {
   const navigation = page.locator(".lab-header nav");
-  await expect(navigation.locator("a")).toHaveCount(5);
-  await expect(navigation.getByRole("link", { name: /中标交底/ })).toHaveAttribute("href", /\/handover$/);
-  await expect(navigation.getByRole("link", { name: /输出与 Skills/ })).toHaveAttribute("href", /\/outputs$/);
+  await expect(navigation.locator("a")).toHaveCount(1);
+  await expect(navigation.getByRole("link", { name: /模型配置/ })).toHaveAttribute("href", /\/model-settings$/);
+  await expect(page.locator(".stage-rail > button")).toHaveCount(5);
 
-  await navigation.getByRole("link", { name: /中标交底/ }).click();
-  await expect(page).toHaveURL(/\/handover$/);
-  await expect(page.locator(".lab-header nav a.active")).toHaveAccessibleName(/中标交底/);
+  await navigation.getByRole("link", { name: /模型配置/ }).click();
+  await expect(page).toHaveURL(/\/model-settings$/);
+  await expect(page.locator(".lab-header nav a.active")).toHaveAccessibleName(/模型配置/);
+  await expect(page.getByText("Codex 工作流", { exact: true }).first()).toBeVisible();
+  await expect(page.getByLabel("API Key（仅当前浏览器会话）")).toHaveCount(0);
 });
 
 test("keeps only the final project actions in the workspace toolbar", async ({ page }) => {
@@ -148,7 +150,7 @@ test("keeps only the final project actions in the workspace toolbar", async ({ p
   await expect(page.getByText("本地工作区路径提示")).toHaveCount(0);
 });
 
-test("stores imported sources and generated files in the selected project folder", async ({ page }) => {
+test("stores sources, Codex tasks, and generated files in the selected project folder", async ({ page }) => {
   await page.evaluate(() => {
     const writes: string[] = [];
     class MemoryDirectory {
@@ -180,6 +182,11 @@ test("stores imported sources and generated files in the selected project folder
   await expect(page.getByRole("button", { name: "项目路径: 客户项目" })).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || []))
     .toContain("客户项目/workspace.json");
+
+  await page.getByRole("button", { name: "生成 Codex 任务" }).click();
+  await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
+    .some((path) => /客户项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/work\/codex-tasks\/presales-.+\.md$/.test(path))))
+    .toBe(true);
 
   await page.getByRole("button", { name: "招标要求" }).click();
   await page.locator('input[type="file"][accept*=".pdf"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The system shall retain audit logs.") });

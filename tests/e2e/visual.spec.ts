@@ -38,7 +38,7 @@ test("theme and language controls preserve a dense responsive layout", async ({ 
   await page.getByRole("button", { name: "Switch to English" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Solution Project Workbench");
   await expect(page.getByText("SOURCE / TRACEABILITY")).toBeVisible();
-  await expect(page.getByRole("link", { name: "招标要求 / Tender requirements" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "模型配置 / Model configuration" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("requirements-dark-en.png"), fullPage: true });
 });
@@ -51,9 +51,22 @@ test("presales communication workspace remains readable", async ({ page }, testI
     localStorage.setItem("cavwic-lab-theme", "light");
   });
   await page.reload();
-  await page.locator(".model-settings summary").click();
   await expect(page.getByRole("heading", { name: "客户沟通与文件响应" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "生成本轮文件" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成 Codex 任务" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("presales-rounds-zh.png"), fullPage: true });
+});
+
+test("global model settings remain readable in both viewports", async ({ page }, testInfo) => {
+  await page.goto("/model-settings");
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("cavwic-lab-locale", "zh");
+    localStorage.setItem("cavwic-lab-theme", "light");
+  });
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "模型配置" })).toBeVisible();
+  await expect(page.getByText("使用当前 Codex 套餐")).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("model-settings-codex-zh.png"), fullPage: true });
 });
