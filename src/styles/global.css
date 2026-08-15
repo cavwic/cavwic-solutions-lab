@@ -163,7 +163,8 @@ textarea { padding: 11px; resize: vertical; }
 .reference-checks input { position: absolute; width: 1px; min-height: 0; opacity: 0; }
 .reference-checks label > span { display: grid; width: 19px; height: 19px; place-items: center; color: transparent; border: 1px solid var(--line); background: var(--surface); }
 .reference-checks input:checked + span { color: #fff; border-color: var(--signal); background: var(--signal); }
-.generation-file-row { display: grid; grid-template-columns: 1fr 130px; gap: 7px; }
+.generation-file-row { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 9px; padding: 11px 0 13px; border-top: 1px solid var(--line); }
+.generation-file-row .field > span { color: var(--signal); font-size: 12px; }
 .generate-command { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; color: #fff; border: 1px solid var(--signal); border-radius: 3px; background: var(--signal); cursor: pointer; font-weight: 700; }
 .generate-command:disabled { opacity: .48; cursor: wait; }
 .generated-file { display: grid; width: 100%; grid-template-columns: 22px minmax(0, 1fr) 18px; gap: 8px; align-items: start; padding: 12px 4px; color: var(--ink); border: 0; border-bottom: 1px solid var(--line); background: transparent; cursor: pointer; text-align: left; }

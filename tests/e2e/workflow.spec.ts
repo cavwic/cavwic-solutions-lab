@@ -110,8 +110,9 @@ test("manages presales communication rounds and generates a referenced file", as
   await firstRound.getByLabel("项目责任人", { exact: true }).fill("解决方案负责人");
   await firstRound.locator(".reference-checks input").first().check();
   await firstRound.getByLabel("文件生成说明").fill("输出需求、建议响应、边界和后续行动。");
-  await firstRound.getByLabel("输出文件名").fill("第一轮响应");
-  await firstRound.getByLabel("输出格式").selectOption("md");
+  await firstRound.getByLabel("响应文件名称").fill("第一轮响应");
+  await expect(firstRound.getByLabel("响应文件格式").locator("option")).toHaveText(["Word", "PPT", "Markdown"]);
+  await firstRound.getByLabel("响应文件格式").selectOption("md");
 
   await page.route("http://127.0.0.1:9000/v1/chat/completions", async (route) => {
     const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
