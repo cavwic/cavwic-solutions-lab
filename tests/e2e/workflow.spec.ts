@@ -89,3 +89,14 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
   await expect(stage).toHaveAttribute("data-stage", "delivery");
   await expect(stage.locator("strong")).toHaveText("交底");
 });
+
+test("shows every lifecycle destination in the top navigation", async ({ page }) => {
+  const navigation = page.locator(".lab-header nav");
+  await expect(navigation.locator("a")).toHaveCount(5);
+  await expect(navigation.getByRole("link", { name: /中标交底/ })).toHaveAttribute("href", /\/handover$/);
+  await expect(navigation.getByRole("link", { name: /输出与 Skills/ })).toHaveAttribute("href", /\/outputs$/);
+
+  await navigation.getByRole("link", { name: /中标交底/ }).click();
+  await expect(page).toHaveURL(/\/handover$/);
+  await expect(page.locator(".lab-header nav a.active")).toHaveAccessibleName(/中标交底/);
+});
