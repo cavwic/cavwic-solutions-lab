@@ -31,4 +31,12 @@ describe("solution workflow rules", () => {
     }));
     expect(validateProject(project).some((item) => item.message.includes("必须记录为负偏离"))).toBe(true);
   });
+
+  it("creates English samples and validation messages when English is active", () => {
+    const project = createSampleProject("ai", "en");
+    project.owner = "";
+    expect(project.name).toBe("Enterprise knowledge assistant presales and tender");
+    expect(project.requirements[0].title).toBe("Critical business processes require traceable records");
+    expect(validateProject(project, "en").some((item) => item.message === "The project owner has not been assigned.")).toBe(true);
+  });
 });

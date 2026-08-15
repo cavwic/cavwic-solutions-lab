@@ -2,7 +2,10 @@ import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("cavwic-lab-locale", "zh");
+  });
   await page.reload();
   await expect(page.locator(".solution-app")).toHaveAttribute("data-ready", "true");
 });
@@ -50,7 +53,19 @@ test("exports project files and exposes versioned Skill downloads", async ({ pag
 test("legacy scoring routes point users to the new workflow", async ({ page }) => {
   for (const path of ["ai-poc", "robot-poc", "dexterous-hand"]) {
     await page.goto(path);
-    await expect(page.getByText("LEGACY TOOL / RETIRED")).toBeVisible();
-    await expect(page.getByRole("link", { name: /解决方案项目工作台/ })).toBeVisible();
+    await expect(page.getByText("旧工具 / 已停用", { exact: true })).toBeVisible();
+    await expect(page.getByRole("link", { name: "进入解决方案项目工作台" })).toBeVisible();
   }
+});
+
+test("uses the system language until the user chooses another language", async ({ page }) => {
+  await page.evaluate(() => localStorage.removeItem("cavwic-lab-locale"));
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-locale", "en");
+  await expect(page).toHaveTitle("CAVWIC Solution Project Workbench");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Solution Project Workbench");
+  await page.getByRole("button", { name: "切换到中文" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-locale", "zh");
+  await expect(page).toHaveTitle("CAVWIC 解决方案项目工作台");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("解决方案项目工作台");
 });

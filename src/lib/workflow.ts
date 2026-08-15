@@ -2,6 +2,7 @@ import {
   createEmptyProject,
   createId,
   type Baseline,
+  type Locale,
   type ProjectManifest,
   type Requirement,
 } from "./workspace-schema";
@@ -39,48 +40,49 @@ export function compareBaselines(requirements: Requirement[]): BaselineDiff[] {
   return result;
 }
 
-export function validateProject(project: ProjectManifest): ValidationIssue[] {
+export function validateProject(project: ProjectManifest, locale: Locale = project.locale): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  if (!project.owner.trim()) issues.push({ id: "project-owner", severity: "warning", area: "project", message: "项目责任人尚未填写。" });
-  if (!project.objective.trim()) issues.push({ id: "project-objective", severity: "warning", area: "project", message: "项目业务目标尚未填写。" });
+  const zh = locale === "zh";
+  if (!project.owner.trim()) issues.push({ id: "project-owner", severity: "warning", area: "project", message: zh ? "项目责任人尚未填写。" : "The project owner has not been assigned." });
+  if (!project.objective.trim()) issues.push({ id: "project-objective", severity: "warning", area: "project", message: zh ? "项目业务目标尚未填写。" : "The business objective has not been entered." });
 
   for (const requirement of project.requirements) {
     if (!requirement.sourceRef) {
-      issues.push({ id: `${requirement.id}-source`, severity: "error", area: "requirement", targetId: requirement.id, message: `“${requirement.title}”缺少原文来源。` });
+      issues.push({ id: `${requirement.id}-source`, severity: "error", area: "requirement", targetId: requirement.id, message: zh ? `“${requirement.title}”缺少原文来源。` : `"${requirement.title}" has no source clause.` });
     }
     if (!requirement.owner.trim()) {
-      issues.push({ id: `${requirement.id}-owner`, severity: "warning", area: "requirement", targetId: requirement.id, message: `“${requirement.title}”尚未指定责任人。` });
+      issues.push({ id: `${requirement.id}-owner`, severity: "warning", area: "requirement", targetId: requirement.id, message: zh ? `“${requirement.title}”尚未指定责任人。` : `"${requirement.title}" has no owner.` });
     }
     if (requirement.reviewState === "approved" && !requirement.formalResponse.trim()) {
-      issues.push({ id: `${requirement.id}-response`, severity: "error", area: "requirement", targetId: requirement.id, message: `“${requirement.title}”已批准，但正式响应为空。` });
+      issues.push({ id: `${requirement.id}-response`, severity: "error", area: "requirement", targetId: requirement.id, message: zh ? `“${requirement.title}”已批准，但正式响应为空。` : `"${requirement.title}" is approved but has no formal response.` });
     }
     if (requirement.reviewState === "approved" && requirement.responseStatus === "missing_evidence") {
-      issues.push({ id: `${requirement.id}-approval`, severity: "error", area: "requirement", targetId: requirement.id, message: `“${requirement.title}”缺少证据，不能批准为正式响应。` });
+      issues.push({ id: `${requirement.id}-approval`, severity: "error", area: "requirement", targetId: requirement.id, message: zh ? `“${requirement.title}”缺少证据，不能批准为正式响应。` : `"${requirement.title}" cannot be approved while evidence is missing.` });
     }
     if (requirement.responseStatus === "confirmed" && requirement.evidenceRefs.length === 0) {
-      issues.push({ id: `${requirement.id}-evidence`, severity: "error", area: "requirement", targetId: requirement.id, message: `“${requirement.title}”标记为已证实满足，但没有绑定证据。` });
+      issues.push({ id: `${requirement.id}-evidence`, severity: "error", area: "requirement", targetId: requirement.id, message: zh ? `“${requirement.title}”标记为已证实满足，但没有绑定证据。` : `"${requirement.title}" is marked confirmed but has no linked evidence.` });
     }
     if (requirement.responseStatus === "unsupported" && requirement.deviationType !== "negative") {
-      issues.push({ id: `${requirement.id}-negative`, severity: "error", area: "requirement", targetId: requirement.id, message: `“${requirement.title}”不满足时必须记录为负偏离。` });
+      issues.push({ id: `${requirement.id}-negative`, severity: "error", area: "requirement", targetId: requirement.id, message: zh ? `“${requirement.title}”不满足时必须记录为负偏离。` : `"${requirement.title}" is unsupported and must be recorded as a negative deviation.` });
     }
     if ((requirement.responseStatus === "custom" || requirement.responseStatus === "conditional") && requirement.deviationType === "none") {
-      issues.push({ id: `${requirement.id}-conditional`, severity: "warning", area: "requirement", targetId: requirement.id, message: `“${requirement.title}”存在条件或定制工作，不应直接标记无偏离。` });
+      issues.push({ id: `${requirement.id}-conditional`, severity: "warning", area: "requirement", targetId: requirement.id, message: zh ? `“${requirement.title}”存在条件或定制工作，不应直接标记无偏离。` : `"${requirement.title}" has conditions or customization work and should not be marked as no deviation.` });
     }
   }
 
   for (const evidence of project.evidence) {
-    if (!evidence.verifiedAt) issues.push({ id: `${evidence.id}-verified`, severity: "warning", area: "evidence", targetId: evidence.id, message: `证据“${evidence.title}”缺少核验日期。` });
+    if (!evidence.verifiedAt) issues.push({ id: `${evidence.id}-verified`, severity: "warning", area: "evidence", targetId: evidence.id, message: zh ? `证据“${evidence.title}”缺少核验日期。` : `Evidence "${evidence.title}" has no verification date.` });
     if (evidence.expiresAt && new Date(evidence.expiresAt).getTime() < Date.now()) {
-      issues.push({ id: `${evidence.id}-expired`, severity: "warning", area: "evidence", targetId: evidence.id, message: `证据“${evidence.title}”已超过复核日期。` });
+      issues.push({ id: `${evidence.id}-expired`, severity: "warning", area: "evidence", targetId: evidence.id, message: zh ? `证据“${evidence.title}”已超过复核日期。` : `Evidence "${evidence.title}" is past its review date.` });
     }
   }
 
   for (const action of project.actions) {
-    if (action.status !== "done" && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: `任务“${action.title}”没有责任人。` });
+    if (action.status !== "done" && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `任务“${action.title}”没有责任人。` : `Action "${action.title}" has no owner.` });
   }
   for (const section of project.sections) {
-    if (section.reviewState === "approved" && section.requirementIds.length === 0) issues.push({ id: `${section.id}-requirement`, severity: "warning", area: "section", targetId: section.id, message: `章节“${section.title}”已批准，但没有关联招标要求。` });
-    if (section.reviewState === "approved" && section.evidenceIds.length === 0) issues.push({ id: `${section.id}-evidence`, severity: "warning", area: "section", targetId: section.id, message: `章节“${section.title}”已批准，但没有关联证据。` });
+    if (section.reviewState === "approved" && section.requirementIds.length === 0) issues.push({ id: `${section.id}-requirement`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联招标要求。` : `Section "${section.title}" is approved but has no linked tender requirement.` });
+    if (section.reviewState === "approved" && section.evidenceIds.length === 0) issues.push({ id: `${section.id}-evidence`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联证据。` : `Section "${section.title}" is approved but has no linked evidence.` });
   }
   return issues;
 }
@@ -92,12 +94,14 @@ export function requirementCoverage(project: ProjectManifest) {
   return { total: tender.length, approved, evidenced, pending: tender.length - approved };
 }
 
-export function createRequirement(baseline: Baseline, patch: Partial<Requirement> = {}): Requirement {
+export function createRequirement(baseline: Baseline, patch: Partial<Requirement> = {}, locale: Locale = "zh"): Requirement {
   return {
     id: createId("req"),
     baseline,
     category: "technical",
-    title: baseline === "tender" ? "待复核的招标要求" : "待确认的客户需求",
+    title: locale === "zh"
+      ? baseline === "tender" ? "待复核的招标要求" : "待确认的客户需求"
+      : baseline === "tender" ? "Tender requirement to review" : "Customer requirement to confirm",
     originalText: "",
     normalizedText: "",
     mandatory: false,
@@ -119,9 +123,9 @@ export function createRequirement(baseline: Baseline, patch: Partial<Requirement
   };
 }
 
-export function createSampleProject(kind: "ai" | "robot" | "electromechanical" = "ai"): ProjectManifest {
-  const project = createEmptyProject("zh");
-  const samples = {
+export function createSampleProject(kind: "ai" | "robot" | "electromechanical" = "ai", locale: Locale = "zh"): ProjectManifest {
+  const project = createEmptyProject(locale);
+  const samples = locale === "zh" ? {
     ai: {
       id: "enterprise-ai-knowledge-assistant",
       name: "企业知识助手售前与技术投标",
@@ -146,48 +150,142 @@ export function createSampleProject(kind: "ai" | "robot" | "electromechanical" =
       objective: "完成现场设备、控制系统、第三方接口和验收边界的技术方案与交底。",
       constraints: "正式结构图由专业设计单位出具；第三方接口版本以书面确认为准。",
     },
+  } as const : {
+    ai: {
+      id: "enterprise-ai-knowledge-assistant",
+      name: "Enterprise knowledge assistant presales and tender",
+      customerAlias: "Equipment manufacturer",
+      industry: "Enterprise AI",
+      objective: "Retrieve current technical documents within permission boundaries, return source-linked answers to frontline staff, and route low-confidence questions to a person.",
+      constraints: "Customer documents must not enter public services. Every answer must cite its source. The system must not send external messages automatically.",
+    },
+    robot: {
+      id: "robot-material-handling",
+      name: "Indoor material delivery robot solution",
+      customerAlias: "Manufacturing campus",
+      industry: "Embodied robotics",
+      objective: "Accept, collect, deliver, and acknowledge material tasks while recording recovery attempts and human intervention.",
+      constraints: "People and robots share the site. Access-control interfaces remain unconfirmed. A qualified responsible party must complete the site risk assessment.",
+    },
+    electromechanical: {
+      id: "electromechanical-security-system",
+      name: "Complex electromechanical safety system proposal",
+      customerAlias: "Public facility project",
+      industry: "Complex electromechanical systems",
+      objective: "Define the technical solution and handover boundary for site devices, controls, third-party interfaces, and acceptance.",
+      constraints: "A qualified design organization must issue formal structural drawings. Written confirmation governs third-party interface versions.",
+    },
   } as const;
   const sample = samples[kind];
-  Object.assign(project, sample, { owner: "解决方案负责人", stage: "tender" as const, budget: "待商务确认", deadline: "2026-09-30", localPathHint: `D:\\Solutions\\${sample.id}` });
+  Object.assign(project, sample, { owner: locale === "zh" ? "解决方案负责人" : "Solution owner", stage: "tender" as const, budget: locale === "zh" ? "待商务确认" : "Pending commercial confirmation", deadline: "2026-09-30", localPathHint: `D:\\Solutions\\${sample.id}` });
+  const text = locale === "zh" ? {
+    discoveryTitle: "关键业务流程需要形成可追溯记录",
+    discoveryOriginal: "沟通确认：关键任务的输入、处理结果、失败原因和人工处理过程需要留痕。",
+    discoveryNormalized: "关键任务输入、输出、失败和人工处理过程需要留痕。",
+    discoveryOwner: "客户业务负责人 / 解决方案",
+    meetingLocator: "沟通纪要 / 第 1 条",
+    meetingExcerpt: "关键任务需要保留完整处理记录。",
+    tenderTitle: "系统运行日志保存不少于 180 天",
+    tenderOriginal: "系统应记录关键操作、接口调用、异常和人工处理过程，日志保存时间不少于 180 天。",
+    tenderNormalized: "记录关键操作、接口调用、异常和人工处理过程，日志保存不少于 180 天。",
+    scoreWeight: "技术评分 4 分",
+    tenderOwner: "产品 / 平台 / 解决方案",
+    tenderLocator: "招标文件第 18 页 / 4.3.2",
+    tenderExcerpt: "日志保存时间不少于 180 天。",
+    formalResponse: "可通过日志策略配置实现，具体存储容量需结合并发量和日志粒度确认。",
+    acceptance: "现场连续运行并抽查日志完整性、检索权限和 180 天保留策略。",
+    meetingFile: "售前沟通纪要.md",
+    meetingLine: "第 1 行",
+    tenderFile: "招标文件-示例.pdf",
+    evidenceTitle: "日志与审计功能手册",
+    evidenceNotes: "仅证明可配置留存策略，容量仍需核算。",
+    presalesAction: "确认用户规模、并发量和日志粒度",
+    presalesActionOwner: "客户 IT / 解决方案",
+    presalesActionNotes: "用于计算存储容量。",
+    deliveryAction: "按中标版本完成技术交底",
+    deliveryActionOwner: "解决方案 / 项目经理",
+    deliveryActionNotes: "交付前冻结承诺基线。",
+    sectionTitle: "日志、审计与权限控制",
+    sectionPurpose: "说明日志范围、访问权限、容量估算和验收方法。",
+    pocObjective: "验证关键流程、失败处理和来源追溯。",
+    pocScope: "使用脱敏样本完成主流程与两个失败场景。",
+    pocAcceptance: "所有结果可复核，失败进入人工处理。",
+    pocFallback: "接口超时、资料缺失和权限不足时停止自动处理并记录原因。",
+    handover: "交底前核对最终投标文件、澄清函、合同技术附件和现场条件。",
+  } : {
+    discoveryTitle: "Critical business processes require traceable records",
+    discoveryOriginal: "Meeting confirmation: preserve task inputs, processing results, failure causes, and human handling records.",
+    discoveryNormalized: "Preserve the inputs, outputs, failures, and human handling records for critical tasks.",
+    discoveryOwner: "Customer business owner / Solution team",
+    meetingLocator: "Meeting notes / Item 1",
+    meetingExcerpt: "Critical tasks require complete processing records.",
+    tenderTitle: "Retain system operation logs for at least 180 days",
+    tenderOriginal: "The system shall record critical operations, interface calls, exceptions, and human handling. Logs shall be retained for at least 180 days.",
+    tenderNormalized: "Record critical operations, interface calls, exceptions, and human handling, with at least 180 days of log retention.",
+    scoreWeight: "4 technical points",
+    tenderOwner: "Product / Platform / Solution team",
+    tenderLocator: "Tender page 18 / 4.3.2",
+    tenderExcerpt: "Logs shall be retained for at least 180 days.",
+    formalResponse: "A configurable retention policy can support this requirement. Storage capacity must be confirmed against concurrency and log granularity.",
+    acceptance: "Run the system continuously on site and inspect log completeness, retrieval permissions, and the 180-day retention policy.",
+    meetingFile: "presales-meeting-notes.md",
+    meetingLine: "Line 1",
+    tenderFile: "sample-tender.pdf",
+    evidenceTitle: "Logging and audit manual",
+    evidenceNotes: "This confirms configurable retention only. Storage capacity still requires calculation.",
+    presalesAction: "Confirm user count, concurrency, and log granularity",
+    presalesActionOwner: "Customer IT / Solution team",
+    presalesActionNotes: "Required for storage sizing.",
+    deliveryAction: "Complete the technical handover against the awarded baseline",
+    deliveryActionOwner: "Solution team / Project manager",
+    deliveryActionNotes: "Freeze the commitment baseline before delivery.",
+    sectionTitle: "Logging, audit, and access control",
+    sectionPurpose: "Define log scope, access permissions, capacity sizing, and acceptance methods.",
+    pocObjective: "Validate the critical flow, failure handling, and source traceability.",
+    pocScope: "Use sanitized samples to run the main flow and two failure scenarios.",
+    pocAcceptance: "Every result can be reviewed, and failures route to a person.",
+    pocFallback: "Stop automated processing and record the cause when an interface times out, material is missing, or permission is denied.",
+    handover: "Before handover, reconcile the final bid, clarification letters, contract technical attachments, and site conditions.",
+  };
 
   const discovery = createRequirement("discovery", {
     id: `${sample.id}-discovery-1`,
-    title: "关键业务流程需要形成可追溯记录",
-    originalText: "沟通确认：关键任务的输入、处理结果、失败原因和人工处理过程需要留痕。",
-    normalizedText: "关键任务输入、输出、失败和人工处理过程需要留痕。",
-    owner: "客户业务负责人 / 解决方案",
+    title: text.discoveryTitle,
+    originalText: text.discoveryOriginal,
+    normalizedText: text.discoveryNormalized,
+    owner: text.discoveryOwner,
     reviewState: "reviewed",
-    sourceRef: { documentId: "meeting-notes", segmentId: "meeting-notes-line-1", locator: "沟通纪要 / 第 1 条", excerpt: "关键任务需要保留完整处理记录。" },
-  });
+    sourceRef: { documentId: "meeting-notes", segmentId: "meeting-notes-line-1", locator: text.meetingLocator, excerpt: text.meetingExcerpt },
+  }, locale);
   const tender = createRequirement("tender", {
     id: `${sample.id}-tender-1`,
-    title: "系统运行日志保存不少于 180 天",
-    originalText: "系统应记录关键操作、接口调用、异常和人工处理过程，日志保存时间不少于 180 天。",
-    normalizedText: "记录关键操作、接口调用、异常和人工处理过程，日志保存不少于 180 天。",
+    title: text.tenderTitle,
+    originalText: text.tenderOriginal,
+    normalizedText: text.tenderNormalized,
     mandatory: true,
     scored: true,
-    scoreWeight: "技术评分 4 分",
-    owner: "产品 / 平台 / 解决方案",
+    scoreWeight: text.scoreWeight,
+    owner: text.tenderOwner,
     responseStatus: "conditional",
     deviationType: "pending",
     reviewState: "reviewed",
     linkedDiscoveryId: discovery.id,
-    sourceRef: { documentId: "tender-v1", segmentId: "tender-v1-page-18", locator: "招标文件第 18 页 / 4.3.2", excerpt: "日志保存时间不少于 180 天。" },
-    formalResponse: "可通过日志策略配置实现，具体存储容量需结合并发量和日志粒度确认。",
-    acceptanceCriteria: "现场连续运行并抽查日志完整性、检索权限和 180 天保留策略。",
-  });
+    sourceRef: { documentId: "tender-v1", segmentId: "tender-v1-page-18", locator: text.tenderLocator, excerpt: text.tenderExcerpt },
+    formalResponse: text.formalResponse,
+    acceptanceCriteria: text.acceptance,
+  }, locale);
   project.sources = [
-    { id: "meeting-notes", name: "售前沟通纪要.md", fileType: "md", version: "1.0", size: 240, sha256: "sample-meeting-notes", importedAt: project.updatedAt, requiresOcr: false, segments: [{ id: "meeting-notes-line-1", locatorKind: "line", locator: "第 1 行", text: "关键任务需要保留完整处理记录。" }] },
-    { id: "tender-v1", name: "招标文件-示例.pdf", fileType: "pdf", version: "1.0", size: 1024, sha256: "sample-tender-v1", importedAt: project.updatedAt, requiresOcr: false, segments: [{ id: "tender-v1-page-18", locatorKind: "page", locator: "第 18 页 / 4.3.2", text: tender.originalText }] },
+    { id: "meeting-notes", name: text.meetingFile, fileType: "md", version: "1.0", size: 240, sha256: "sample-meeting-notes", importedAt: project.updatedAt, requiresOcr: false, segments: [{ id: "meeting-notes-line-1", locatorKind: "line", locator: text.meetingLine, text: text.meetingExcerpt }] },
+    { id: "tender-v1", name: text.tenderFile, fileType: "pdf", version: "1.0", size: 1024, sha256: "sample-tender-v1", importedAt: project.updatedAt, requiresOcr: false, segments: [{ id: "tender-v1-page-18", locatorKind: "page", locator: text.tenderLocator, text: tender.originalText }] },
   ];
   project.requirements = [discovery, tender];
-  project.evidence = [{ id: "evidence-log-manual", title: "日志与审计功能手册", kind: "manual", fileName: "logging-manual.pdf", version: "3.2", verifiedAt: "2026-08-14", expiresAt: "2026-11-12", sourceRef: null, notes: "仅证明可配置留存策略，容量仍需核算。" }];
+  project.evidence = [{ id: "evidence-log-manual", title: text.evidenceTitle, kind: "manual", fileName: "logging-manual.pdf", version: "3.2", verifiedAt: "2026-08-14", expiresAt: "2026-11-12", sourceRef: null, notes: text.evidenceNotes }];
   project.actions = [
-    { id: createId("action"), stage: "presales", title: "确认用户规模、并发量和日志粒度", owner: "客户 IT / 解决方案", dueDate: "2026-08-28", status: "working", sourceRequirementId: tender.id, notes: "用于计算存储容量。" },
-    { id: createId("action"), stage: "delivery", title: "按中标版本完成技术交底", owner: "解决方案 / 项目经理", dueDate: "", status: "open", sourceRequirementId: tender.id, notes: "交付前冻结承诺基线。" },
+    { id: createId("action"), stage: "presales", title: text.presalesAction, owner: text.presalesActionOwner, dueDate: "2026-08-28", status: "working", sourceRequirementId: tender.id, notes: text.presalesActionNotes },
+    { id: createId("action"), stage: "delivery", title: text.deliveryAction, owner: text.deliveryActionOwner, dueDate: "", status: "open", sourceRequirementId: tender.id, notes: text.deliveryActionNotes },
   ];
-  project.sections = [{ id: createId("section"), title: "日志、审计与权限控制", purpose: "说明日志范围、访问权限、容量估算和验收方法。", requirementIds: [tender.id], evidenceIds: [], body: tender.formalResponse, reviewState: "reviewed" }];
-  project.pocPlan = { objective: "验证关键流程、失败处理和来源追溯。", demoScope: "使用脱敏样本完成主流程与两个失败场景。", acceptance: "所有结果可复核，失败进入人工处理。", failureAndFallback: "接口超时、资料缺失和权限不足时停止自动处理并记录原因。" };
-  project.handoverNotes = "交底前核对最终投标文件、澄清函、合同技术附件和现场条件。";
+  project.sections = [{ id: createId("section"), title: text.sectionTitle, purpose: text.sectionPurpose, requirementIds: [tender.id], evidenceIds: [], body: tender.formalResponse, reviewState: "reviewed" }];
+  project.pocPlan = { objective: text.pocObjective, demoScope: text.pocScope, acceptance: text.pocAcceptance, failureAndFallback: text.pocFallback };
+  project.handoverNotes = text.handover;
   return project;
 }

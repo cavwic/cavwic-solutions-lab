@@ -29,10 +29,18 @@ test("theme and language controls preserve a dense responsive layout", async ({ 
   await page.getByRole("button", { name: /招标要求/ }).click();
   await expectNoHorizontalOverflow(page);
 
-  await page.locator('.workspace-toolbar button[title="Dark mode"]').click();
+  await page.getByRole("button", { name: "切换到深色模式" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.getByRole("button", { name: "EN" }).click();
+  await page.getByRole("button", { name: "技术标组包" }).click();
+  await expect(page.getByText("文件包登记")).toBeVisible();
+  await expect(page.getByText("技术方案", { exact: true }).last()).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("bid-package-dark-zh.png"), fullPage: true });
+  await page.getByRole("button", { name: "招标要求" }).click();
+  await page.getByRole("button", { name: "Switch to English" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Solution Project Workbench");
+  await expect(page.getByText("SOURCE / TRACEABILITY")).toBeVisible();
+  await expect(page.getByRole("link", { name: "招标要求 / Tender requirements" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("requirements-dark-en.png"), fullPage: true });
 });
