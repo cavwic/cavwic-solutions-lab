@@ -55,8 +55,10 @@ import {
   compareBaselines,
   createRequirement,
   createSampleProject,
+  inferProjectStage,
   localizeBuiltInProject,
   requirementCoverage,
+  syncProjectStage,
   validateProject,
 } from "../lib/workflow";
 import {
@@ -292,8 +294,8 @@ const evidenceKindLabels = {
   en: { "product-intro": "Product introduction", sow: "SOW", manual: "Manual", "historical-solution": "Historical solution", certificate: "Certificate", drawing: "Drawing", other: "Other" },
 } as const;
 const projectStageLabels = {
-  zh: { presales: "售前", tender: "投标", delivery: "交付" },
-  en: { presales: "Presales", tender: "Tender", delivery: "Delivery" },
+  zh: { presales: "售前", tender: "投标", delivery: "交底" },
+  en: { presales: "Presales", tender: "Tender", delivery: "Handover" },
 } as const;
 const diffRelationLabels = {
   zh: { added: "新增", changed: "已修改", unchanged: "未变化", removed: "已删除", conflict: "有冲突" },
@@ -337,6 +339,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
   const issues = useMemo(() => validateProject(project, locale), [project, locale]);
   const coverage = useMemo(() => requirementCoverage(project), [project]);
+  const currentStage = useMemo(() => inferProjectStage(project), [project]);
   const diffs = useMemo(() => compareBaselines(project.requirements), [project.requirements]);
   const selectedSource = project.sources.find((item) => item.id === selectedSourceId) || project.sources[0];
   const selectedRequirement = project.requirements.find((item) => item.id === selectedRequirementId) || project.requirements[0];
@@ -355,8 +358,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const stored = localStorage.getItem("cavwic-solution-workspace");
     if (stored) {
       const parsed = projectManifestSchema.safeParse(JSON.parse(stored));
-      if (parsed.success) setProject(localizeBuiltInProject(parsed.data, nextLocale));
-    } else setProject(createEmptyProject(nextLocale));
+      if (parsed.success) setProject(syncProjectStage(localizeBuiltInProject(parsed.data, nextLocale)));
+    } else setProject(syncProjectStage(createEmptyProject(nextLocale)));
     setReady(true);
   }, []);
 
@@ -372,7 +375,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   }, [project, locale, ready, t.saved]);
 
-  const updateProject = <K extends keyof ProjectManifest>(key: K, value: ProjectManifest[K]) => setProject((current) => ({ ...current, [key]: value, updatedAt: new Date().toISOString() }));
+  const updateProject = <K extends keyof ProjectManifest>(key: K, value: ProjectManifest[K]) => setProject((current) => syncProjectStage({ ...current, [key]: value, updatedAt: new Date().toISOString() }));
   const updateRequirement = (id: string, patch: Partial<Requirement>) => updateProject("requirements", project.requirements.map((item) => item.id === id ? { ...item, ...patch } : item));
 
   const switchLocale = () => {
@@ -382,7 +385,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     document.documentElement.dataset.locale = next;
     document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
     window.dispatchEvent(new CustomEvent("cavwic-locale-change", { detail: next }));
-    setProject((current) => localizeBuiltInProject(current, next));
+    setProject((current) => syncProjectStage(localizeBuiltInProject(current, next)));
   };
   const switchTheme = () => {
     const next = theme === "light" ? "dark" : "light";
@@ -393,7 +396,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
   const loadSample = (kind: "ai" | "robot" | "electromechanical") => {
     const sample = createSampleProject(kind, locale);
-    setProject(sample);
+    setProject(syncProjectStage(sample));
     setSelectedSourceId(sample.sources[1]?.id || sample.sources[0]?.id || "");
     setSelectedRequirementId(sample.requirements[1]?.id || sample.requirements[0]?.id || "");
   };
@@ -468,7 +471,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     if (!directoryHandle) return;
     setBusy(true);
     try {
-      setProject(await loadActiveProject(directoryHandle));
+      setProject(syncProjectStage(await loadActiveProject(directoryHandle)));
       setNotice(t.loaded);
     } catch {
       setNotice(t.invalid);
@@ -479,7 +482,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     try {
       const imported = await importProjectArchive(file);
-      setProject(imported.project);
+      setProject(syncProjectStage(imported.project));
       setSourceFiles(imported.sourceFiles);
       setNotice(t.loaded);
     } catch { setNotice(t.invalid); }
@@ -603,9 +606,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <div className="header-metrics"><div><strong>{coverage.total}</strong><span>{t.total}</span></div><div><strong>{coverage.evidenced}</strong><span>{t.evidenced}</span></div><div><strong>{coverage.approved}</strong><span>{t.approved}</span></div><div><strong>{coverage.pending}</strong><span>{t.pending}</span></div></div>
     </header>
     <div className="privacy-bar"><ShieldCheck size={17}/><span>{t.local}</span><span className="notice" aria-live="polite">{busy ? (locale === "zh" ? "处理中…" : "Working…") : notice}</span></div>
-    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.sample} onClick={() => loadSample("ai")} title={t.sample}><Database size={17}/><span>{t.sample}</span></button><button type="button" aria-label={t.robotSample} onClick={() => loadSample("robot")} title={t.robotSample}><Database size={17}/><span>{t.robotSample}</span></button><button type="button" aria-label={t.electromechanicalSample} onClick={() => loadSample("electromechanical")} title={t.electromechanicalSample}><Database size={17}/><span>{t.electromechanicalSample}</span></button><button type="button" aria-label={t.reset} onClick={() => setProject(createEmptyProject(locale))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className="toolbar-spacer" type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
+    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.sample} onClick={() => loadSample("ai")} title={t.sample}><Database size={17}/><span>{t.sample}</span></button><button type="button" aria-label={t.robotSample} onClick={() => loadSample("robot")} title={t.robotSample}><Database size={17}/><span>{t.robotSample}</span></button><button type="button" aria-label={t.electromechanicalSample} onClick={() => loadSample("electromechanical")} title={t.electromechanicalSample}><Database size={17}/><span>{t.electromechanicalSample}</span></button><button type="button" aria-label={t.reset} onClick={() => setProject(syncProjectStage(createEmptyProject(locale)))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className="toolbar-spacer" type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
     <div className="workspace-shell">
-      <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status"><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][project.stage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
+      <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status" data-stage={currentStage}><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][currentStage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
       <main className="workspace-content">{content}</main>
     </div>
   </div>;

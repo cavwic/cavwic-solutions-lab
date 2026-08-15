@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareBaselines, createRequirement, createSampleProject, localizeBuiltInProject, validateProject } from "./workflow";
+import { compareBaselines, createRequirement, createSampleProject, inferProjectStage, localizeBuiltInProject, validateProject } from "./workflow";
 import { createEmptyProject } from "./workspace-schema";
 
 describe("solution workflow rules", () => {
@@ -57,5 +57,19 @@ describe("solution workflow rules", () => {
     const staleCache = createEmptyProject("zh");
     staleCache.name = "New solution project";
     expect(localizeBuiltInProject(staleCache, "zh").name).toBe("新建解决方案项目");
+  });
+
+  it("derives the current project stage from the most advanced recorded work", () => {
+    const project = createEmptyProject("zh");
+    expect(inferProjectStage(project)).toBe("presales");
+
+    project.customerAlias = "某客户";
+    expect(inferProjectStage(project)).toBe("presales");
+
+    project.requirements.push(createRequirement("tender"));
+    expect(inferProjectStage(project)).toBe("tender");
+
+    project.actions.push({ id: "handover-1", stage: "delivery", title: "技术交底", owner: "", dueDate: "", status: "open", sourceRequirementId: "", notes: "" });
+    expect(inferProjectStage(project)).toBe("delivery");
   });
 });

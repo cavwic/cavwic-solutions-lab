@@ -71,3 +71,21 @@ test("uses the system language until the user chooses another language", async (
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("解决方案项目工作台");
   await expect(page.locator(".project-header > div > span")).toHaveText("新建解决方案项目");
 });
+
+test("updates the current stage only when work is recorded", async ({ page }) => {
+  const stage = page.locator(".rail-status");
+  await expect(stage).toHaveAttribute("data-stage", "presales");
+  await expect(stage.locator("strong")).toHaveText("售前");
+
+  await page.getByRole("button", { name: "招标要求" }).click();
+  await expect(stage).toHaveAttribute("data-stage", "presales");
+  await page.locator(".requirements-pane .pane-title .icon-command").click();
+  await expect(stage).toHaveAttribute("data-stage", "tender");
+  await expect(stage.locator("strong")).toHaveText("投标");
+
+  await page.getByRole("button", { name: "中标交底" }).click();
+  await expect(stage).toHaveAttribute("data-stage", "tender");
+  await page.locator("section:has(.handover-grid) .icon-command").click();
+  await expect(stage).toHaveAttribute("data-stage", "delivery");
+  await expect(stage.locator("strong")).toHaveText("交底");
+});

@@ -4,6 +4,7 @@ import {
   type Baseline,
   type Locale,
   type ProjectManifest,
+  type ProjectStage,
   type Requirement,
 } from "./workspace-schema";
 
@@ -92,6 +93,28 @@ export function requirementCoverage(project: ProjectManifest) {
   const approved = tender.filter((item) => item.reviewState === "approved").length;
   const evidenced = tender.filter((item) => item.evidenceRefs.length > 0).length;
   return { total: tender.length, approved, evidenced, pending: tender.length - approved };
+}
+
+export function inferProjectStage(project: ProjectManifest): ProjectStage {
+  const hasDeliveryWork = project.handoverNotes.trim().length > 0
+    || project.actions.some((item) => item.stage === "delivery")
+    || project.deliverables.some((item) => item.stage === "delivery");
+  if (hasDeliveryWork) return "delivery";
+
+  const hasTenderWork = project.sources.length > 0
+    || project.requirements.some((item) => item.baseline === "tender")
+    || project.evidence.length > 0
+    || project.sections.length > 0
+    || project.deliverables.some((item) => item.stage === "tender");
+  if (hasTenderWork) return "tender";
+
+  // Presales is the first stage and remains current until tender or handover work is recorded.
+  return "presales";
+}
+
+export function syncProjectStage(project: ProjectManifest): ProjectManifest {
+  const stage = inferProjectStage(project);
+  return project.stage === stage ? project : { ...project, stage };
 }
 
 export function createRequirement(baseline: Baseline, patch: Partial<Requirement> = {}, locale: Locale = "zh"): Requirement {
