@@ -64,8 +64,10 @@ test("uses the system language until the user chooses another language", async (
   await expect(page.locator("html")).toHaveAttribute("data-locale", "en");
   await expect(page).toHaveTitle("CAVWIC Solution Project Workbench");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Solution Project Workbench");
+  await expect(page.locator(".project-header > div > span")).toHaveText("New solution project");
   await page.getByRole("button", { name: "切换到中文" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-locale", "zh");
   await expect(page).toHaveTitle("CAVWIC 解决方案项目工作台");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("解决方案项目工作台");
+  await expect(page.locator(".project-header > div > span")).toHaveText("新建解决方案项目");
 });

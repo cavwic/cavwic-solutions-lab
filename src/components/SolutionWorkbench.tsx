@@ -55,6 +55,7 @@ import {
   compareBaselines,
   createRequirement,
   createSampleProject,
+  localizeBuiltInProject,
   requirementCoverage,
   validateProject,
 } from "../lib/workflow";
@@ -354,7 +355,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const stored = localStorage.getItem("cavwic-solution-workspace");
     if (stored) {
       const parsed = projectManifestSchema.safeParse(JSON.parse(stored));
-      if (parsed.success) setProject(parsed.data);
+      if (parsed.success) setProject(localizeBuiltInProject(parsed.data, nextLocale));
     } else setProject(createEmptyProject(nextLocale));
     setReady(true);
   }, []);
@@ -381,7 +382,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     document.documentElement.dataset.locale = next;
     document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
     window.dispatchEvent(new CustomEvent("cavwic-locale-change", { detail: next }));
-    updateProject("locale", next);
+    setProject((current) => localizeBuiltInProject(current, next));
   };
   const switchTheme = () => {
     const next = theme === "light" ? "dark" : "light";

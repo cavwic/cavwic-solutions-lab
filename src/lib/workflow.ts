@@ -289,3 +289,49 @@ export function createSampleProject(kind: "ai" | "robot" | "electromechanical" =
   project.handoverNotes = text.handover;
   return project;
 }
+
+export function localizeBuiltInProject(project: ProjectManifest, locale: Locale): ProjectManifest {
+  const sampleKinds = {
+    "enterprise-ai-knowledge-assistant": "ai",
+    "robot-material-handling": "robot",
+    "electromechanical-security-system": "electromechanical",
+  } as const;
+  const sampleKind = sampleKinds[project.id as keyof typeof sampleKinds];
+  const toTemplate = sampleKind ? createSampleProject(sampleKind, locale) : createEmptyProject(locale);
+  const translatableFields = new Set([
+    "name", "customerAlias", "industry", "owner", "budget", "objective", "constraints",
+    "title", "originalText", "normalizedText", "scoreWeight", "locator", "excerpt", "formalResponse",
+    "acceptanceCriteria", "notes", "text", "purpose", "demoScope", "acceptance",
+    "failureAndFallback", "handoverNotes",
+  ]);
+  const translations = new Map<string, string>();
+
+  const collectTranslations = (from: unknown, to: unknown, key = "") => {
+    if (typeof from === "string" && typeof to === "string") {
+      if (translatableFields.has(key) && from && from !== to) translations.set(from, to);
+      return;
+    }
+    if (Array.isArray(from) && Array.isArray(to)) {
+      from.forEach((item, index) => collectTranslations(item, to[index], key));
+      return;
+    }
+    if (!from || !to || typeof from !== "object" || typeof to !== "object") return;
+    for (const [childKey, value] of Object.entries(from)) {
+      collectTranslations(value, (to as Record<string, unknown>)[childKey], childKey);
+    }
+  };
+
+  const translateKnownValues = (value: unknown, key = ""): unknown => {
+    if (typeof value === "string") return translatableFields.has(key) ? translations.get(value) ?? value : value;
+    if (Array.isArray(value)) return value.map((item) => translateKnownValues(item, key));
+    if (!value || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, translateKnownValues(childValue, childKey)]));
+  };
+
+  for (const sourceLocale of ["zh", "en"] as const) {
+    const fromTemplate = sampleKind ? createSampleProject(sampleKind, sourceLocale) : createEmptyProject(sourceLocale);
+    collectTranslations(fromTemplate, toTemplate);
+  }
+  const localized = translateKnownValues(project) as ProjectManifest;
+  return { ...localized, locale, updatedAt: new Date().toISOString() };
+}

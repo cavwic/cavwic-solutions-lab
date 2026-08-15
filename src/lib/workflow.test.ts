@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { compareBaselines, createRequirement, createSampleProject, validateProject } from "./workflow";
+import { compareBaselines, createRequirement, createSampleProject, localizeBuiltInProject, validateProject } from "./workflow";
+import { createEmptyProject } from "./workspace-schema";
 
 describe("solution workflow rules", () => {
   it("keeps discovery and tender baselines separate", () => {
@@ -38,5 +39,23 @@ describe("solution workflow rules", () => {
     expect(project.name).toBe("Enterprise knowledge assistant presales and tender");
     expect(project.requirements[0].title).toBe("Critical business processes require traceable records");
     expect(validateProject(project, "en").some((item) => item.message === "The project owner has not been assigned.")).toBe(true);
+  });
+
+  it("localizes untouched built-in content without replacing user text", () => {
+    const empty = localizeBuiltInProject(createEmptyProject("en"), "zh");
+    expect(empty.name).toBe("新建解决方案项目");
+    expect(empty.deliverables.map((item) => item.title)).toContain("产品介绍");
+
+    const edited = createEmptyProject("en");
+    edited.name = "Customer archive upgrade";
+    expect(localizeBuiltInProject(edited, "zh").name).toBe("Customer archive upgrade");
+
+    const sample = localizeBuiltInProject(createSampleProject("robot", "zh"), "en");
+    expect(sample.name).toBe("Indoor material delivery robot solution");
+    expect(sample.requirements[0].title).toBe("Critical business processes require traceable records");
+
+    const staleCache = createEmptyProject("zh");
+    staleCache.name = "New solution project";
+    expect(localizeBuiltInProject(staleCache, "zh").name).toBe("新建解决方案项目");
   });
 });
