@@ -47,12 +47,18 @@ export function projectToCsv(project: ProjectManifest, locale: Locale = project.
 
 export function presentationMarkdown(project: ProjectManifest): string {
   const approved = project.requirements.filter((item) => item.reviewState === "approved");
+  const presalesHistory = project.presalesRounds.map((round) => [
+    `## ${round.title} ${round.meetingAt}`,
+    round.customerNeeds || "客户需求待确认",
+    round.actions.map((item) => `- ${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.status}`).join("\n"),
+    round.generatedFiles.map((file) => `- 已生成: ${file.name}`).join("\n"),
+  ].filter(Boolean).join("\n\n")).join("\n\n");
   const slides = [
     `# ${project.name}\n\n${project.customerAlias || "客户代称待确认"}\n\n${project.industry}`,
     `# 项目目标与边界\n\n## 业务目标\n${project.objective || "待确认"}\n\n## 当前约束\n${project.constraints || "待确认"}`,
+    `# 售前沟通记录\n\n${presalesHistory || "尚无沟通记录"}`,
     `# 已确认需求\n\n${approved.length ? approved.map((item) => `- ${item.title}: ${item.formalResponse}`).join("\n") : "- 尚无已批准要求"}`,
     `# 方案结构\n\n${project.sections.length ? project.sections.map((item) => `- ${item.title}: ${item.purpose}`).join("\n") : "- 方案章节待编制"}`,
-    `# POC 与验收\n\n## 验证范围\n${project.pocPlan.demoScope || "待确认"}\n\n## 验收条件\n${project.pocPlan.acceptance || "待确认"}\n\n## 失败与降级\n${project.pocPlan.failureAndFallback || "待确认"}`,
     `# 后续行动\n\n${project.actions.filter((item) => item.status !== "done").map((item) => `- ${item.title} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}`).join("\n") || "- 暂无未完成事项"}`,
   ];
   return slides.join("\n\n---\n\n");
@@ -66,6 +72,16 @@ export function projectToMarkdown(project: ProjectManifest): string {
     `- 项目编号: ${project.id}\n- 客户代称: ${project.customerAlias || "待确认"}\n- 行业: ${project.industry || "待确认"}\n- 责任人: ${project.owner || "待确认"}\n- 当前阶段: ${project.stage}\n- 截止日期: ${project.deadline || "待确认"}`,
     `## 业务目标\n\n${project.objective || "待确认"}`,
     `## 约束与不可承诺项\n\n${project.constraints || "待确认"}`,
+    `## 售前沟通记录\n\n${project.presalesRounds.map((round) => [
+      `### ${round.title}`,
+      `- 沟通时间: ${round.meetingAt || "待确认"}`,
+      `- 客户信息及需求: ${round.customerNeeds || "待确认"}`,
+      `- 客户附件: ${round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join(", ") || "无"}`,
+      `- 参考资料: ${round.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join(", ") || "无"}`,
+      `- 生成要求: ${round.generationInstructions || "待填写"}`,
+      `- 生成文件: ${round.generatedFiles.map((file) => file.name).join(", ") || "无"}`,
+      round.actions.map((item) => `  - [${item.status === "done" ? "x" : " "}] ${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}`).join("\n"),
+    ].filter(Boolean).join("\n")).join("\n\n") || "尚无沟通记录。"}`,
     `## 招标要求响应表\n\n${project.requirements.map((item) => [
       `### ${item.title}`,
       `- 基线: ${item.baseline}`,
@@ -111,6 +127,14 @@ export async function projectToDocx(project: ProjectManifest): Promise<Blob> {
       new Paragraph(project.objective || "待确认"),
       new Paragraph({ text: "约束与不可承诺项", heading: HeadingLevel.HEADING_1 }),
       new Paragraph(project.constraints || "待确认"),
+      new Paragraph({ text: "售前沟通记录", heading: HeadingLevel.HEADING_1 }),
+      ...project.presalesRounds.flatMap((round) => [
+        new Paragraph({ text: round.title, heading: HeadingLevel.HEADING_2 }),
+        new Paragraph({ text: `沟通时间：${round.meetingAt || "待确认"}` }),
+        new Paragraph({ text: `客户信息及需求：${round.customerNeeds || "待确认"}` }),
+        ...round.actions.map((item) => new Paragraph({ text: `${item.title || "待填写执行项"} / ${item.owner || "责任人待定"} / ${item.status}`, bullet: { level: 0 } })),
+        new Paragraph({ text: `生成文件：${round.generatedFiles.map((file) => file.name).join("、") || "无"}` }),
+      ]),
       new Paragraph({ text: "招标要求响应表", heading: HeadingLevel.HEADING_1 }),
       new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } }),
       new Paragraph({ text: "技术方案章节", heading: HeadingLevel.HEADING_1 }),
@@ -139,6 +163,19 @@ export async function projectToXlsx(project: ProjectManifest): Promise<Blob> {
   const actions = workbook.addWorksheet("行动与交底清单", { views: [{ state: "frozen", ySplit: 1 }] });
   actions.columns = [{ header: "阶段", key: "stage", width: 14 }, { header: "任务", key: "title", width: 42 }, { header: "责任人", key: "owner", width: 24 }, { header: "截止日期", key: "dueDate", width: 16 }, { header: "状态", key: "status", width: 14 }, { header: "关联要求", key: "requirement", width: 26 }, { header: "说明", key: "notes", width: 42 }];
   project.actions.forEach((item) => actions.addRow(item));
+
+  const presales = workbook.addWorksheet("售前沟通记录", { views: [{ state: "frozen", ySplit: 1 }] });
+  presales.columns = [{ header: "沟通节点", key: "title", width: 24 }, { header: "沟通时间", key: "meetingAt", width: 22 }, { header: "客户信息及需求", key: "customerNeeds", width: 52 }, { header: "执行清单", key: "actions", width: 52 }, { header: "客户附件", key: "requirements", width: 36 }, { header: "参考资料", key: "references", width: 36 }, { header: "生成要求", key: "instructions", width: 48 }, { header: "生成文件", key: "outputs", width: 36 }];
+  project.presalesRounds.forEach((round) => presales.addRow({
+    title: round.title,
+    meetingAt: round.meetingAt,
+    customerNeeds: round.customerNeeds,
+    actions: round.actions.map((item) => `${item.title} / ${item.owner} / ${item.status}`).join("\n"),
+    requirements: round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
+    references: round.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
+    instructions: round.generationInstructions,
+    outputs: round.generatedFiles.map((file) => file.name).join("\n"),
+  }));
 
   const evidence = workbook.addWorksheet("资料与证据索引", { views: [{ state: "frozen", ySplit: 1 }] });
   evidence.columns = [{ header: "编号", key: "id", width: 24 }, { header: "资料名称", key: "title", width: 36 }, { header: "类型", key: "kind", width: 22 }, { header: "文件", key: "fileName", width: 32 }, { header: "版本", key: "version", width: 12 }, { header: "核验日期", key: "verifiedAt", width: 16 }, { header: "复核日期", key: "expiresAt", width: 16 }, { header: "说明", key: "notes", width: 48 }];
@@ -188,17 +225,22 @@ export async function projectToPptx(project: ProjectManifest): Promise<Blob> {
   slide.addText("约束与边界", { x: 6.9, y: 2, w: 2.2, h: 0.4, fontSize: 17, bold: true, color: "17211F", margin: 0 });
   slide.addText(project.constraints || "待确认", { x: 6.9, y: 2.55, w: 5.6, h: 2.7, fontSize: 15, color: "36423F", breakLine: false, valign: "top", margin: 0.05 });
 
-  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "02 / REQUIREMENTS", "已审阅的需求与响应");
+  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "02 / PRESALES", "售前沟通与文件响应");
+  const presalesText = project.presalesRounds.slice(0, 6).map((round) => [
+    `${round.title}  ${round.meetingAt}`,
+    round.customerNeeds || "客户需求待确认",
+    `执行项 ${round.actions.length} 项  |  生成文件 ${round.generatedFiles.length} 个`,
+  ].join("\n")).join("\n\n") || "尚无沟通记录。";
+  slide.addText(presalesText, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 14, color: "24302D", breakLine: false, valign: "top", margin: 0 });
+
+  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "03 / REQUIREMENTS", "已审阅的需求与响应");
   const reviewed = project.requirements.filter((item) => item.reviewState !== "draft").slice(0, 8);
   const tableRows: PptxGenJS.TableRow[] = [["要求", "状态", "偏离", "责任人"], ...reviewed.map((item) => [item.title, responseLabels.zh[item.responseStatus], deviationLabels.zh[item.deviationType], item.owner || "待定"])] as PptxGenJS.TableRow[];
   slide.addTable(tableRows, { x: 0.7, y: 2, w: 12, h: 3.8, border: { type: "solid", color: "CBD2CF", pt: 1 }, fill: { color: "FFFFFF" }, color: "24302D", fontSize: 11, rowH: 0.42, margin: 0.08, bold: false });
 
-  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "03 / SOLUTION", "技术方案章节与证据");
+  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "04 / SOLUTION", "技术方案章节与证据");
   const sectionText = project.sections.map((item, index) => `${String(index + 1).padStart(2, "0")}  ${item.title}\n${item.purpose || item.body || "待编制"}`).join("\n\n") || "方案章节待编制。";
   slide.addText(sectionText, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 14, color: "24302D", breakLine: false, valign: "top", margin: 0 });
-
-  slide = pptx.addSlide(); slide.background = { color: "17211F" }; slide.addText("POC 与验收", { x: 0.7, y: 0.75, w: 7, h: 0.6, fontSize: 28, bold: true, color: "FFFFFF", margin: 0 });
-  slide.addText(`验证范围\n${project.pocPlan.demoScope || "待确认"}\n\n验收条件\n${project.pocPlan.acceptance || "待确认"}\n\n失败与降级\n${project.pocPlan.failureAndFallback || "待确认"}`, { x: 0.7, y: 1.75, w: 11.8, h: 4.6, fontSize: 15, color: "E8ECEA", breakLine: false, valign: "top", margin: 0 });
 
   slide = pptx.addSlide(); slide.background = { color: "F4F6F2" }; addTitle(slide, "05 / NEXT ACTION", "会后执行与技术交底");
   const actions = project.actions.filter((item) => item.status !== "done").slice(0, 8).map((item) => `• ${item.title}  |  ${item.owner || "责任人待定"}  |  ${item.dueDate || "日期待定"}`).join("\n\n") || "暂无未完成事项。";

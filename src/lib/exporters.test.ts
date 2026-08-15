@@ -9,7 +9,8 @@ describe("project exporters", () => {
     expect(projectToMarkdown(project)).toContain("招标要求响应表");
     expect(projectToMarkdown(project)).toContain("第 18 页");
     expect(projectToCsv(project).charCodeAt(0)).toBe(0xfeff);
-    expect(presentationMarkdown(project)).toContain("POC 与验收");
+    expect(presentationMarkdown(project)).not.toContain("POC 与验收");
+    expect(presentationMarkdown(project)).toContain("后续行动");
   });
 
   it("round-trips the complete output archive", async () => {

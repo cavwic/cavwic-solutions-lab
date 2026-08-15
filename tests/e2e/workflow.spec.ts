@@ -91,6 +91,44 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
   await expect(stage.locator("strong")).toHaveText("交底");
 });
 
+test("manages presales communication rounds and generates a referenced file", async ({ page }) => {
+  await page.locator('input[accept=".json,.csv,.xlsx"]').setInputFiles({
+    name: "crm-project.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify({ customerAlias: "客户 A", industry: "企业 AI", objective: "形成可审阅的售前响应", companyName: "示例企业平台", platform: "CRM export" })),
+  });
+  await expect(page.getByLabel("客户代称")).toHaveValue("客户 A");
+  await expect(page.locator(".source-strip").getByText("crm-project.json")).toBeVisible();
+  await expect(page.getByText("POC 与定制演示")).toHaveCount(0);
+
+  const firstRound = page.locator(".presales-round").first();
+  await firstRound.locator(".round-needs textarea").fill("客户本轮需要响应需求 A，并保留待确认边界。");
+  await firstRound.getByRole("button", { name: "新增执行项" }).click();
+  await firstRound.getByLabel("执行项", { exact: true }).fill("确认接口范围");
+  await firstRound.getByLabel("项目责任人", { exact: true }).fill("解决方案负责人");
+  await firstRound.locator(".reference-checks input").first().check();
+  await firstRound.getByLabel("文件生成说明").fill("输出需求、建议响应、边界和后续行动。");
+  await firstRound.getByLabel("输出文件名").fill("第一轮响应");
+  await firstRound.getByLabel("输出格式").selectOption("md");
+
+  await page.locator(".model-settings summary").click();
+  await page.getByLabel("本地模型名称").fill("test-local-model");
+  await page.route("http://127.0.0.1:11434/v1/chat/completions", async (route) => {
+    const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
+    expect(request.messages[1].content).toContain("客户本轮需要响应需求 A");
+    expect(request.messages[1].content).toContain("crm-project.json");
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 第一轮响应\n\n## 客户需求\n需求 A\n\n## 待确认项\n接口范围待确认。" } }] }) });
+  });
+  await firstRound.getByRole("button", { name: "生成本轮文件" }).click();
+  await expect(firstRound.getByRole("button", { name: /第一轮响应\.md/ })).toBeVisible();
+
+  await page.getByRole("button", { name: "新增沟通节点" }).click();
+  await expect(page.locator(".presales-round")).toHaveCount(2);
+  await expect(page.locator(".presales-round").nth(1).getByText("第一轮响应.md")).toBeVisible();
+  await page.locator(".presales-round").nth(1).getByRole("button", { name: /删除: 第 2 次沟通/ }).click();
+  await expect(page.locator(".presales-round")).toHaveCount(1);
+});
+
 test("shows every lifecycle destination in the top navigation", async ({ page }) => {
   const navigation = page.locator(".lab-header nav");
   await expect(navigation.locator("a")).toHaveCount(5);

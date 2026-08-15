@@ -42,3 +42,18 @@ test("theme and language controls preserve a dense responsive layout", async ({ 
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("requirements-dark-en.png"), fullPage: true });
 });
+
+test("presales communication workspace remains readable", async ({ page }, testInfo) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("cavwic-lab-locale", "zh");
+    localStorage.setItem("cavwic-lab-theme", "light");
+  });
+  await page.reload();
+  await page.locator(".model-settings summary").click();
+  await expect(page.getByRole("heading", { name: "客户沟通与文件响应" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成本轮文件" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("presales-rounds-zh.png"), fullPage: true });
+});

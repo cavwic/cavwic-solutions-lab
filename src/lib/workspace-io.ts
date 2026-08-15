@@ -135,6 +135,12 @@ export async function saveGeneratedFileToDirectory(handle: DirectoryHandleLike, 
   await writeFile(outputs, name, content);
 }
 
+export async function readGeneratedFileFromDirectory(handle: DirectoryHandleLike, project: ProjectManifest, name: string): Promise<File> {
+  const projectDirectory = await getProjectDirectory(handle, project);
+  const outputs = await projectDirectory.getDirectoryHandle("outputs");
+  return outputs.getFileHandle(name).then((fileHandle) => fileHandle.getFile());
+}
+
 export async function saveProjectToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, sourceFiles: Map<string, File> = new Map()): Promise<void> {
   await saveProjectStateToDirectory(handle, project, sourceFiles);
 

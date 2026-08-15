@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compareBaselines, createRequirement, createSampleProject, inferProjectStage, localizeBuiltInProject, validateProject } from "./workflow";
-import { createEmptyProject } from "./workspace-schema";
+import { createEmptyProject, projectManifestSchema } from "./workspace-schema";
 
 describe("solution workflow rules", () => {
   it("keeps discovery and tender baselines separate", () => {
@@ -71,5 +71,14 @@ describe("solution workflow rules", () => {
 
     project.actions.push({ id: "handover-1", stage: "delivery", title: "技术交底", owner: "", dueDate: "", status: "open", sourceRequirementId: "", notes: "" });
     expect(inferProjectStage(project)).toBe("delivery");
+  });
+
+  it("opens older project manifests with default presales workflow fields", () => {
+    const legacy = createEmptyProject("zh") as Record<string, unknown>;
+    delete legacy.enterpriseContext;
+    delete legacy.presalesRounds;
+    const parsed = projectManifestSchema.parse(legacy);
+    expect(parsed.enterpriseContext.sourceIds).toEqual([]);
+    expect(parsed.presalesRounds).toEqual([]);
   });
 });

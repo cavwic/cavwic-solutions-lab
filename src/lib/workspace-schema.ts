@@ -24,7 +24,7 @@ export const responseStatusSchema = z.enum([
 ]);
 export const deviationTypeSchema = z.enum(["positive", "none", "negative", "pending"]);
 export const reviewStateSchema = z.enum(["draft", "reviewed", "approved"]);
-export const sourceFileTypeSchema = z.enum(["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "ocr"]);
+export const sourceFileTypeSchema = z.enum(["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "json", "ocr"]);
 
 export const sourceSegmentSchema = z.object({
   id: z.string().min(1),
@@ -143,6 +143,47 @@ export const pocPlanSchema = z.object({
   failureAndFallback: z.string(),
 });
 
+export const enterpriseContextSchema = z.object({
+  companyName: z.string().default(""),
+  platform: z.string().default(""),
+  importedAt: z.string().default(""),
+  notes: z.string().default(""),
+  sourceIds: z.array(z.string()).default([]),
+});
+
+export const presalesRoundActionSchema = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  owner: z.string(),
+  dueDate: z.string(),
+  status: z.enum(["open", "working", "blocked", "done"]),
+});
+
+export const presalesGeneratedFileSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  format: z.enum(["md", "docx", "pptx"]),
+  createdAt: z.string(),
+  provider: z.enum(["local", "cloud"]),
+  model: z.string(),
+  sourceId: z.string(),
+  relativePath: z.string(),
+});
+
+export const presalesRoundSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  meetingAt: z.string(),
+  customerNeeds: z.string(),
+  requirementSourceIds: z.array(z.string()),
+  actions: z.array(presalesRoundActionSchema),
+  referenceSourceIds: z.array(z.string()),
+  generationInstructions: z.string(),
+  outputName: z.string(),
+  outputFormat: z.enum(["md", "docx", "pptx"]),
+  generatedFiles: z.array(presalesGeneratedFileSchema),
+});
+
 export const projectManifestSchema = z.object({
   schemaVersion: z.literal(SCHEMA_VERSION),
   id: z.string().min(1),
@@ -165,6 +206,8 @@ export const projectManifestSchema = z.object({
   deliverables: z.array(deliverableSchema),
   sections: z.array(solutionSectionSchema),
   pocPlan: pocPlanSchema,
+  enterpriseContext: enterpriseContextSchema.default({ companyName: "", platform: "", importedAt: "", notes: "", sourceIds: [] }),
+  presalesRounds: z.array(presalesRoundSchema).default([]),
   handoverNotes: z.string(),
 });
 
@@ -197,6 +240,10 @@ export type Requirement = z.infer<typeof requirementSchema>;
 export type ActionItem = z.infer<typeof actionItemSchema>;
 export type Deliverable = z.infer<typeof deliverableSchema>;
 export type SolutionSection = z.infer<typeof solutionSectionSchema>;
+export type EnterpriseContext = z.infer<typeof enterpriseContextSchema>;
+export type PresalesRoundAction = z.infer<typeof presalesRoundActionSchema>;
+export type PresalesGeneratedFile = z.infer<typeof presalesGeneratedFileSchema>;
+export type PresalesRound = z.infer<typeof presalesRoundSchema>;
 export type ProjectManifest = z.infer<typeof projectManifestSchema>;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
 export type OutputManifest = z.infer<typeof outputManifestSchema>;
@@ -206,6 +253,22 @@ export function createId(prefix: string): string {
     ? crypto.randomUUID().slice(0, 8)
     : Math.random().toString(36).slice(2, 10);
   return `${prefix}-${random}`;
+}
+
+export function createPresalesRound(locale: Locale = "zh", index = 1): PresalesRound {
+  return {
+    id: createId("round"),
+    title: locale === "zh" ? `第 ${index} 次沟通` : `Communication ${index}`,
+    meetingAt: "",
+    customerNeeds: "",
+    requirementSourceIds: [],
+    actions: [],
+    referenceSourceIds: [],
+    generationInstructions: "",
+    outputName: locale === "zh" ? `第${index}次沟通响应文件` : `communication-${index}-response`,
+    outputFormat: "docx",
+    generatedFiles: [],
+  };
 }
 
 export function createEmptyProject(locale: Locale = "zh"): ProjectManifest {
@@ -233,10 +296,11 @@ export function createEmptyProject(locale: Locale = "zh"): ProjectManifest {
       { id: createId("deliverable"), stage: "presales", kind: "product-intro", title: locale === "zh" ? "产品介绍" : "Product introduction", status: "not-started", owner: "", dueDate: "", sourceIds: [], notes: "" },
       { id: createId("deliverable"), stage: "presales", kind: "preliminary-solution", title: locale === "zh" ? "初步方案" : "Preliminary solution", status: "not-started", owner: "", dueDate: "", sourceIds: [], notes: "" },
       { id: createId("deliverable"), stage: "presales", kind: "discovery-record", title: locale === "zh" ? "需求调研文件" : "Discovery record", status: "not-started", owner: "", dueDate: "", sourceIds: [], notes: "" },
-      { id: createId("deliverable"), stage: "presales", kind: "poc-plan", title: locale === "zh" ? "POC 计划" : "POC plan", status: "not-started", owner: "", dueDate: "", sourceIds: [], notes: "" },
     ],
     sections: [],
     pocPlan: { objective: "", demoScope: "", acceptance: "", failureAndFallback: "" },
+    enterpriseContext: { companyName: "", platform: "", importedAt: "", notes: "", sourceIds: [] },
+    presalesRounds: [createPresalesRound(locale, 1)],
     handoverNotes: "",
   };
 }

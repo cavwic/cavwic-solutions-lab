@@ -81,6 +81,11 @@ export function validateProject(project: ProjectManifest, locale: Locale = proje
   for (const action of project.actions) {
     if (action.status !== "done" && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `任务“${action.title}”没有责任人。` : `Action "${action.title}" has no owner.` });
   }
+  for (const round of project.presalesRounds) {
+    for (const action of round.actions) {
+      if (action.status !== "done" && action.title.trim() && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的执行项“${action.title}”没有责任人。` : `Action "${action.title}" in "${round.title}" has no owner.` });
+    }
+  }
   for (const section of project.sections) {
     if (section.reviewState === "approved" && section.requirementIds.length === 0) issues.push({ id: `${section.id}-requirement`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联招标要求。` : `Section "${section.title}" is approved but has no linked tender requirement.` });
     if (section.reviewState === "approved" && section.evidenceIds.length === 0) issues.push({ id: `${section.id}-evidence`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联证据。` : `Section "${section.title}" is approved but has no linked evidence.` });
@@ -101,7 +106,15 @@ export function inferProjectStage(project: ProjectManifest): ProjectStage {
     || project.deliverables.some((item) => item.stage === "delivery");
   if (hasDeliveryWork) return "delivery";
 
-  const hasTenderWork = project.sources.length > 0
+  const presalesSourceIds = new Set([
+    ...project.enterpriseContext.sourceIds,
+    ...project.presalesRounds.flatMap((round) => [
+      ...round.requirementSourceIds,
+      ...round.referenceSourceIds,
+      ...round.generatedFiles.map((file) => file.sourceId),
+    ]),
+  ]);
+  const hasTenderWork = project.sources.some((source) => !presalesSourceIds.has(source.id))
     || project.requirements.some((item) => item.baseline === "tender")
     || project.evidence.length > 0
     || project.sections.length > 0
@@ -325,7 +338,7 @@ export function localizeBuiltInProject(project: ProjectManifest, locale: Locale)
     "name", "customerAlias", "industry", "owner", "budget", "objective", "constraints",
     "title", "originalText", "normalizedText", "scoreWeight", "locator", "excerpt", "formalResponse",
     "acceptanceCriteria", "notes", "text", "purpose", "demoScope", "acceptance",
-    "failureAndFallback", "handoverNotes",
+    "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName",
   ]);
   const translations = new Map<string, string>();
 

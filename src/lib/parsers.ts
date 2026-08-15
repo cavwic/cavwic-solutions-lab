@@ -1,7 +1,7 @@
 import type { SourceDocument, SourceSegment } from "./workspace-schema";
 import { createId } from "./workspace-schema";
 
-const supportedExtensions = ["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv"] as const;
+const supportedExtensions = ["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "json"] as const;
 type SupportedExtension = (typeof supportedExtensions)[number];
 
 function extensionOf(name: string): SupportedExtension {

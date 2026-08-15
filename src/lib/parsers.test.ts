@@ -43,6 +43,7 @@ describe("source parsers", () => {
     ["notes.md", "Markdown requirement"],
     ["notes.txt", "Text requirement"],
     ["notes.csv", "id,requirement\n1,CSV requirement"],
+    ["project.json", "{\"customerAlias\":\"Customer A\"}"],
   ])("parses %s with line-level traceability", async (name, contents) => {
     const result = await parseSourceFile(new File([contents], name));
     expect(result.segments.length).toBeGreaterThan(0);
