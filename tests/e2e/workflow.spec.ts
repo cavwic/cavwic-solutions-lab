@@ -11,7 +11,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("runs the presales-to-handover project flow and persists edits", async ({ page }) => {
-  await page.getByRole("button", { name: /载入示例 \/ AI|Load sample \/ AI/ }).click();
+  await page.getByRole("button", { name: /AI 示例|AI sample/ }).click();
   const projectName = page.locator(".field-grid input").first();
   await expect(projectName).toHaveValue("企业知识助手售前与技术投标");
   await projectName.fill("端到端解决方案项目");
@@ -36,7 +36,7 @@ test("runs the presales-to-handover project flow and persists edits", async ({ p
 });
 
 test("exports project files and exposes versioned Skill downloads", async ({ page }) => {
-  await page.getByRole("button", { name: /载入示例 \/ AI|Load sample \/ AI/ }).click();
+  await page.getByRole("button", { name: /AI 示例|AI sample/ }).click();
   await page.getByRole("button", { name: /输出与 Skills|Outputs and Skills/ }).click();
   await expect(page.locator(".format-grid button")).toHaveCount(6);
   await expect(page.locator(".skill-downloads a")).toHaveCount(3);

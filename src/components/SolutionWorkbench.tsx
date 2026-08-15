@@ -84,7 +84,7 @@ const copy = {
     bid: "技术标组包",
     handover: "中标交底",
     outputs: "输出与 Skills",
-    sample: "载入示例",
+    sample: "AI 示例",
     reset: "新建项目",
     projectName: "项目名称",
     customer: "客户代称",
@@ -171,7 +171,7 @@ const copy = {
     bid: "Technical bid pack",
     handover: "Award handover",
     outputs: "Outputs and Skills",
-    sample: "Load sample",
+    sample: "AI sample",
     reset: "New project",
     projectName: "Project name",
     customer: "Customer alias",
@@ -603,7 +603,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <div className="header-metrics"><div><strong>{coverage.total}</strong><span>{t.total}</span></div><div><strong>{coverage.evidenced}</strong><span>{t.evidenced}</span></div><div><strong>{coverage.approved}</strong><span>{t.approved}</span></div><div><strong>{coverage.pending}</strong><span>{t.pending}</span></div></div>
     </header>
     <div className="privacy-bar"><ShieldCheck size={17}/><span>{t.local}</span><span className="notice" aria-live="polite">{busy ? (locale === "zh" ? "处理中…" : "Working…") : notice}</span></div>
-    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={`${t.sample} / AI`} onClick={() => loadSample("ai")} title={`${t.sample} / AI`}><Database size={17}/><span>{t.sample} / AI</span></button><button type="button" aria-label={t.robotSample} onClick={() => loadSample("robot")} title={t.robotSample}><Database size={17}/><span>{t.robotSample}</span></button><button type="button" aria-label={t.electromechanicalSample} onClick={() => loadSample("electromechanical")} title={t.electromechanicalSample}><Database size={17}/><span>{t.electromechanicalSample}</span></button><button type="button" aria-label={t.reset} onClick={() => setProject(createEmptyProject(locale))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className="toolbar-spacer" type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
+    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.sample} onClick={() => loadSample("ai")} title={t.sample}><Database size={17}/><span>{t.sample}</span></button><button type="button" aria-label={t.robotSample} onClick={() => loadSample("robot")} title={t.robotSample}><Database size={17}/><span>{t.robotSample}</span></button><button type="button" aria-label={t.electromechanicalSample} onClick={() => loadSample("electromechanical")} title={t.electromechanicalSample}><Database size={17}/><span>{t.electromechanicalSample}</span></button><button type="button" aria-label={t.reset} onClick={() => setProject(createEmptyProject(locale))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className="toolbar-spacer" type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
     <div className="workspace-shell">
       <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status"><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][project.stage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
       <main className="workspace-content">{content}</main>
