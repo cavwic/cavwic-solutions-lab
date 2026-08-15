@@ -100,3 +100,49 @@ test("shows every lifecycle destination in the top navigation", async ({ page })
   await expect(page).toHaveURL(/\/handover$/);
   await expect(page.locator(".lab-header nav a.active")).toHaveAccessibleName(/中标交底/);
 });
+
+test("stores imported sources and generated files in the selected project folder", async ({ page }) => {
+  await page.evaluate(() => {
+    const writes: string[] = [];
+    class MemoryDirectory {
+      name: string;
+      path: string;
+      directories = new Map<string, MemoryDirectory>();
+      constructor(name: string, path = "") { this.name = name; this.path = path || name; }
+      async queryPermission() { return "granted" as PermissionState; }
+      async requestPermission() { return "granted" as PermissionState; }
+      async getDirectoryHandle(name: string) {
+        if (!this.directories.has(name)) this.directories.set(name, new MemoryDirectory(name, `${this.path}/${name}`));
+        return this.directories.get(name)!;
+      }
+      async getFileHandle(name: string) {
+        const path = `${this.path}/${name}`;
+        return {
+          async getFile() { return new File([], name); },
+          async createWritable() {
+            return { async write() { writes.push(path); }, async close() {} };
+          },
+        };
+      }
+    }
+    (window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites = writes;
+    window.showDirectoryPicker = async () => new MemoryDirectory("客户项目") as never;
+  });
+
+  await page.getByRole("button", { name: "项目路径" }).click();
+  await expect(page.getByRole("button", { name: "项目路径: 客户项目" })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || []))
+    .toContain("客户项目/workspace.json");
+
+  await page.getByRole("button", { name: "招标要求" }).click();
+  await page.locator('input[type="file"][accept*=".pdf"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The system shall retain audit logs.") });
+  await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
+    .some((path) => /客户项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/sources\/tender\.txt$/.test(path))))
+    .toBe(true);
+
+  await page.getByRole("button", { name: "输出与 Skills" }).click();
+  await page.locator(".format-grid button").filter({ hasText: "Markdown" }).click();
+  await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
+    .some((path) => /客户项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/outputs\/[^/]+\.md$/.test(path))))
+    .toBe(true);
+});

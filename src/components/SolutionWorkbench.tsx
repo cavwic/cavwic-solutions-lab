@@ -47,6 +47,10 @@ import {
   chooseWorkspaceDirectory,
   importProjectArchive,
   loadActiveProject,
+  persistWorkspaceDirectory,
+  restoreWorkspaceDirectory,
+  saveGeneratedFileToDirectory,
+  saveProjectStateToDirectory,
   saveProjectToDirectory,
   supportsDirectoryAccess,
   type DirectoryHandleLike,
@@ -88,6 +92,7 @@ const copy = {
     outputs: "输出与 Skills",
     sample: "AI 示例",
     reset: "新建项目",
+    projectPath: "项目路径",
     projectName: "项目名称",
     customer: "客户代称",
     industry: "行业",
@@ -132,6 +137,7 @@ const copy = {
     total: "招标要求",
     saved: "已保存到浏览器",
     folderSaved: "项目及正式输出已写入本地工作区。",
+    projectPathSaved: "项目已保存到所选路径。",
     loaded: "已载入项目。",
     invalid: "文件结构无法识别，请检查项目版本或文件类型。",
     parsing: "正在解析来源文件",
@@ -175,6 +181,7 @@ const copy = {
     outputs: "Outputs and Skills",
     sample: "AI sample",
     reset: "New project",
+    projectPath: "Project folder",
     projectName: "Project name",
     customer: "Customer alias",
     industry: "Industry",
@@ -219,6 +226,7 @@ const copy = {
     total: "Tender requirements",
     saved: "Saved in browser",
     folderSaved: "Project and formal outputs were written to the local workspace.",
+    projectPathSaved: "Project saved to the selected folder.",
     loaded: "Project loaded.",
     invalid: "The file structure is not supported. Check its project version or file type.",
     parsing: "Parsing source files",
@@ -360,6 +368,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const parsed = projectManifestSchema.safeParse(JSON.parse(stored));
       if (parsed.success) setProject(syncProjectStage(localizeBuiltInProject(parsed.data, nextLocale)));
     } else setProject(syncProjectStage(createEmptyProject(nextLocale)));
+    void restoreWorkspaceDirectory().then((handle) => {
+      if (handle) setDirectoryHandle(handle);
+    }).catch(() => undefined);
     setReady(true);
   }, []);
 
@@ -374,6 +385,16 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       setNotice(locale === "zh" ? "项目过大，请写入本地工作区目录。" : "Project is too large for browser storage. Write it to a local workspace folder.");
     }
   }, [project, locale, ready, t.saved]);
+
+  useEffect(() => {
+    if (!ready || !directoryHandle) return;
+    const timer = window.setTimeout(() => {
+      void saveProjectStateToDirectory(directoryHandle, project)
+        .then(() => setNotice(t.projectPathSaved))
+        .catch(() => setNotice(locale === "zh" ? "项目路径授权已失效，请重新选择。" : "Project folder access expired. Choose it again."));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [directoryHandle, locale, project, ready, t.projectPathSaved]);
 
   const updateProject = <K extends keyof ProjectManifest>(key: K, value: ProjectManifest[K]) => setProject((current) => syncProjectStage({ ...current, [key]: value, updatedAt: new Date().toISOString() }));
   const updateRequirement = (id: string, patch: Partial<Requirement>) => updateProject("requirements", project.requirements.map((item) => item.id === id ? { ...item, ...patch } : item));
@@ -413,9 +434,11 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         parsed.push(source);
         nextFiles.set(source.id, file);
       }
-      updateProject("sources", [...project.sources, ...parsed]);
+      const nextProject = syncProjectStage({ ...project, sources: [...project.sources, ...parsed], updatedAt: new Date().toISOString() });
+      setProject(nextProject);
       setSourceFiles(nextFiles);
       setSelectedSourceId(parsed[0]?.id || "");
+      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
       const ocrCount = parsed.filter((item) => item.requiresOcr).length;
       setNotice(ocrCount ? t.ocr : `${parsed.length} ${locale === "zh" ? "个文件已解析" : "files parsed"}`);
     } catch {
@@ -449,13 +472,16 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const chooseDirectory = async () => {
+    setBusy(true);
     try {
       const handle = await chooseWorkspaceDirectory();
+      await persistWorkspaceDirectory(handle);
       setDirectoryHandle(handle);
-      setNotice(`${locale === "zh" ? "已授权目录" : "Folder authorized"}: ${handle.name}`);
+      await saveProjectStateToDirectory(handle, project, sourceFiles);
+      setNotice(`${locale === "zh" ? "项目路径已设置" : "Project folder selected"}: ${handle.name}`);
     } catch {
       setNotice(locale === "zh" ? "未选择目录，可继续使用 ZIP。" : "No folder selected. ZIP remains available.");
-    }
+    } finally { setBusy(false); }
   };
   const syncDirectory = async () => {
     if (!directoryHandle) return;
@@ -482,8 +508,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     try {
       const imported = await importProjectArchive(file);
-      setProject(syncProjectStage(imported.project));
+      const nextProject = syncProjectStage(imported.project);
+      setProject(nextProject);
       setSourceFiles(imported.sourceFiles);
+      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, imported.sourceFiles);
       setNotice(t.loaded);
     } catch { setNotice(t.invalid); }
     finally { setBusy(false); if (archiveInput.current) archiveInput.current.value = ""; }
@@ -492,8 +520,26 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     try {
       const result = await buildProjectArchive(project, includeSources, sourceFiles);
-      downloadBlob(`${projectFileStem(project)}-package.zip`, result.blob);
-      setNotice(locale === "zh" ? `ZIP 已生成，包含 ${result.manifest.files.length} 个正式输出。` : `ZIP created with ${result.manifest.files.length} formal outputs.`);
+      const name = `${projectFileStem(project)}-package.zip`;
+      if (directoryHandle) await saveGeneratedFileToDirectory(directoryHandle, project, name, result.blob);
+      else downloadBlob(name, result.blob);
+      setNotice(locale === "zh"
+        ? `ZIP 已生成，包含 ${result.manifest.files.length} 个正式输出${directoryHandle ? "，并已保存到项目路径" : ""}。`
+        : `ZIP created with ${result.manifest.files.length} formal outputs${directoryHandle ? " and saved to the project folder" : ""}.`);
+    } finally { setBusy(false); }
+  };
+
+  const saveOutput = async (name: string, content: Blob | string | ArrayBuffer | Promise<Blob | string | ArrayBuffer>, type: string) => {
+    setBusy(true);
+    try {
+      const resolved = await content;
+      if (directoryHandle) {
+        await saveGeneratedFileToDirectory(directoryHandle, project, name, resolved);
+        setNotice(locale === "zh" ? `${name} 已保存到项目路径。` : `${name} saved to the project folder.`);
+      } else if (typeof resolved === "string") downloadText(name, resolved, type);
+      else downloadBlob(name, resolved instanceof Blob ? resolved : new Blob([resolved], { type }));
+    } catch {
+      setNotice(t.invalid);
     } finally { setBusy(false); }
   };
 
@@ -593,7 +639,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
   const renderOutputs = () => <>
     <section className="work-section"><div className="section-heading"><div><p>{t.localWorkspaceEyebrow}</p><h2>{locale === "zh" ? "本地项目目录" : "Local project folder"}</h2></div><span>{directoryHandle?.name || (supportsDirectoryAccess() ? t.ready : "ZIP")}</span></div><div className="output-actions"><button type="button" onClick={() => void chooseDirectory()}><FolderOpen size={18}/>{t.directory}</button><button type="button" disabled={!directoryHandle || busy} onClick={() => void syncDirectory()}><Save size={18}/>{t.sync}</button><button type="button" disabled={!directoryHandle || busy} onClick={() => void rescanDirectory()}><RefreshCw size={18}/>{t.rescan}</button><button type="button" onClick={() => archiveInput.current?.click()}><FileArchive size={18}/>{t.importZip}</button><input ref={archiveInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void importArchive(event.target.files?.[0])}/></div></section>
-    <section className="work-section"><div className="section-heading"><div><p>{t.formalOutputsEyebrow}</p><h2>{locale === "zh" ? "正式文件导出" : "Formal file exports"}</h2></div></div><div className="format-grid"><button type="button" onClick={() => downloadText(`${projectFileStem(project)}.md`, projectToMarkdown(project), "text/markdown;charset=utf-8")}><FileText/><strong>Markdown</strong><span>.md</span></button><button type="button" onClick={() => downloadText(`${projectFileStem(project)}-requirements.csv`, projectToCsv(project), "text/csv;charset=utf-8")}><FileSpreadsheet/><strong>CSV</strong><span>UTF-8 BOM</span></button><button type="button" onClick={() => void projectToDocx(project).then((blob) => downloadBlob(`${projectFileStem(project)}.docx`, blob))}><FileText/><strong>Word</strong><span>.docx</span></button><button type="button" onClick={() => void projectToXlsx(project).then((blob) => downloadBlob(`${projectFileStem(project)}.xlsx`, blob))}><FileSpreadsheet/><strong>Excel</strong><span>.xlsx</span></button><button type="button" onClick={() => void projectToPptx(project).then((blob) => downloadBlob(`${projectFileStem(project)}.pptx`, blob))}><Presentation/><strong>PowerPoint</strong><span>.pptx</span></button><button type="button" onClick={() => downloadText("presentation.md", presentationMarkdown(project), "text/markdown;charset=utf-8")}><Presentation/><strong>{locale === "zh" ? "演示中间稿" : "Presentation source"}</strong><span>presentation.md</span></button></div><label className="include-sources"><input type="checkbox" checked={includeSources} onChange={(event) => setIncludeSources(event.target.checked)}/><span><Check size={14}/></span>{t.includeSources}</label><button className="primary-export" type="button" disabled={busy} onClick={() => void exportArchive()}><Archive size={19}/>{t.exportZip}</button></section>
+    <section className="work-section"><div className="section-heading"><div><p>{t.formalOutputsEyebrow}</p><h2>{locale === "zh" ? "正式文件导出" : "Formal file exports"}</h2></div></div><div className="format-grid"><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.md`, projectToMarkdown(project), "text/markdown;charset=utf-8")}><FileText/><strong>Markdown</strong><span>.md</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}-requirements.csv`, projectToCsv(project), "text/csv;charset=utf-8")}><FileSpreadsheet/><strong>CSV</strong><span>UTF-8 BOM</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.docx`, projectToDocx(project), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}><FileText/><strong>Word</strong><span>.docx</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.xlsx`, projectToXlsx(project), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}><FileSpreadsheet/><strong>Excel</strong><span>.xlsx</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.pptx`, projectToPptx(project), "application/vnd.openxmlformats-officedocument.presentationml.presentation")}><Presentation/><strong>PowerPoint</strong><span>.pptx</span></button><button type="button" disabled={busy} onClick={() => void saveOutput("presentation.md", presentationMarkdown(project), "text/markdown;charset=utf-8")}><Presentation/><strong>{locale === "zh" ? "演示中间稿" : "Presentation source"}</strong><span>presentation.md</span></button></div><label className="include-sources"><input type="checkbox" checked={includeSources} onChange={(event) => setIncludeSources(event.target.checked)}/><span><Check size={14}/></span>{t.includeSources}</label><button className="primary-export" type="button" disabled={busy} onClick={() => void exportArchive()}><Archive size={19}/>{t.exportZip}</button></section>
     <section className="work-section task-section"><div><div className="section-heading"><div><p>{t.codexEyebrow}</p><h2>{t.taskPrompt}</h2></div></div><div className="segmented"><button type="button" className={taskKind === "workflow" ? "active" : ""} onClick={() => setTaskKind("workflow")}>solution-workflow</button><button type="button" className={taskKind === "extract" ? "active" : ""} onClick={() => setTaskKind("extract")}>tender-requirement-extraction</button><button type="button" className={taskKind === "bid" ? "active" : ""} onClick={() => setTaskKind("bid")}>technical-bid-package</button></div><textarea className="task-prompt" rows={8} readOnly value={taskPrompt}/><button className="command-button" type="button" onClick={() => void navigator.clipboard.writeText(taskPrompt).then(() => setNotice(locale === "zh" ? "任务已复制。" : "Task copied."))}><Copy size={17}/>{t.copyTask}</button><p className="skill-hint">{t.skillHint}</p></div><aside className="skill-downloads"><p>{t.downloadsEyebrow}</p><h2>{t.skillDownloads}</h2>{["solution-workflow", "tender-requirement-extraction", "technical-bid-package"].map((skill) => <a href={`${base}/downloads/skills/${skill}-1.0.0.zip`} download key={skill}><Download size={17}/><span>{skill}</span></a>)}</aside></section>
     <section className="work-section"><div className="section-heading"><div><p>{t.qualityEyebrow}</p><h2>{t.audit}</h2></div><span className={issues.some((item) => item.severity === "error") ? "issue-count error" : "issue-count"}>{issues.length}</span></div>{issues.length ? <div className="issue-list">{issues.map((issue) => <div className={issue.severity} key={issue.id}><AlertTriangle size={17}/><span>{issue.message}</span><small>{issueAreaLabels[locale][issue.area]}</small></div>)}</div> : <div className="clean-state"><ShieldCheck size={26}/><p>{t.noIssues}</p></div>}</section>
   </>;
@@ -606,7 +652,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <div className="header-metrics"><div><strong>{coverage.total}</strong><span>{t.total}</span></div><div><strong>{coverage.evidenced}</strong><span>{t.evidenced}</span></div><div><strong>{coverage.approved}</strong><span>{t.approved}</span></div><div><strong>{coverage.pending}</strong><span>{t.pending}</span></div></div>
     </header>
     <div className="privacy-bar"><ShieldCheck size={17}/><span>{t.local}</span><span className="notice" aria-live="polite">{busy ? (locale === "zh" ? "处理中…" : "Working…") : notice}</span></div>
-    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.sample} onClick={() => loadSample("ai")} title={t.sample}><Database size={17}/><span>{t.sample}</span></button><button type="button" aria-label={t.robotSample} onClick={() => loadSample("robot")} title={t.robotSample}><Database size={17}/><span>{t.robotSample}</span></button><button type="button" aria-label={t.electromechanicalSample} onClick={() => loadSample("electromechanical")} title={t.electromechanicalSample}><Database size={17}/><span>{t.electromechanicalSample}</span></button><button type="button" aria-label={t.reset} onClick={() => setProject(syncProjectStage(createEmptyProject(locale)))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className="toolbar-spacer" type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
+    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.sample} onClick={() => loadSample("ai")} title={t.sample}><Database size={17}/><span>{t.sample}</span></button><button type="button" aria-label={t.robotSample} onClick={() => loadSample("robot")} title={t.robotSample}><Database size={17}/><span>{t.robotSample}</span></button><button type="button" aria-label={t.electromechanicalSample} onClick={() => loadSample("electromechanical")} title={t.electromechanicalSample}><Database size={17}/><span>{t.electromechanicalSample}</span></button><button type="button" aria-label={t.reset} onClick={() => setProject(syncProjectStage(createEmptyProject(locale)))} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className={`toolbar-spacer project-path-command${directoryHandle ? " active" : ""}`} type="button" disabled={busy} aria-label={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`} onClick={() => void chooseDirectory()} title={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`}><FolderOpen size={17}/><span>{directoryHandle?.name || t.projectPath}</span></button><button type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
     <div className="workspace-shell">
       <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status" data-stage={currentStage}><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][currentStage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
       <main className="workspace-content">{content}</main>

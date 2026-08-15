@@ -11,6 +11,10 @@ export type DirectoryHandleLike = {
   requestPermission?(descriptor?: { mode?: "read" | "readwrite" }): Promise<PermissionState>;
 };
 
+const HANDLE_DATABASE = "cavwic-solutions-lab";
+const HANDLE_STORE = "workspace-handles";
+const ACTIVE_HANDLE_KEY = "active-workspace";
+
 declare global {
   interface Window {
     showDirectoryPicker?: (options?: { mode?: "read" | "readwrite" }) => Promise<DirectoryHandleLike>;
@@ -22,6 +26,47 @@ async function writeFile(directory: DirectoryHandleLike, name: string, content: 
   const writable = await handle.createWritable();
   await writable.write(content);
   await writable.close();
+}
+
+function openHandleDatabase(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(HANDLE_DATABASE, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(HANDLE_STORE)) request.result.createObjectStore(HANDLE_STORE);
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function persistWorkspaceDirectory(handle: DirectoryHandleLike): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  try {
+    const database = await openHandleDatabase();
+    await new Promise<void>((resolve, reject) => {
+      const transaction = database.transaction(HANDLE_STORE, "readwrite");
+      transaction.objectStore(HANDLE_STORE).put(handle, ACTIVE_HANDLE_KEY);
+      transaction.oncomplete = () => resolve();
+      transaction.onerror = () => reject(transaction.error);
+    });
+    database.close();
+  } catch {
+    // Directory access remains usable for this session when handle persistence is unavailable.
+  }
+}
+
+export async function restoreWorkspaceDirectory(): Promise<DirectoryHandleLike | null> {
+  if (typeof indexedDB === "undefined") return null;
+  const database = await openHandleDatabase();
+  const handle = await new Promise<DirectoryHandleLike | undefined>((resolve, reject) => {
+    const request = database.transaction(HANDLE_STORE, "readonly").objectStore(HANDLE_STORE).get(ACTIVE_HANDLE_KEY);
+    request.onsuccess = () => resolve(request.result as DirectoryHandleLike | undefined);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  if (!handle) return null;
+  const permission = await handle.queryPermission?.({ mode: "readwrite" });
+  return permission === "granted" || permission === undefined ? handle : null;
 }
 
 async function readJson(directory: DirectoryHandleLike, name: string): Promise<unknown> {
@@ -46,15 +91,27 @@ async function ensureWritePermission(handle: DirectoryHandleLike): Promise<void>
   if (requested !== "granted") throw new Error("Workspace write permission was not granted.");
 }
 
-export async function saveProjectToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, sourceFiles: Map<string, File> = new Map()): Promise<void> {
-  await ensureWritePermission(handle);
-  const library = await handle.getDirectoryHandle("library", { create: true });
+async function getProjectDirectory(handle: DirectoryHandleLike, project: ProjectManifest): Promise<DirectoryHandleLike> {
   const projects = await handle.getDirectoryHandle("projects", { create: true });
-  const projectDirectory = await projects.getDirectoryHandle(project.id, { create: true });
-  const sources = await projectDirectory.getDirectoryHandle("sources", { create: true });
-  const work = await projectDirectory.getDirectoryHandle("work", { create: true });
-  const templates = await projectDirectory.getDirectoryHandle("templates", { create: true });
-  const outputs = await projectDirectory.getDirectoryHandle("outputs", { create: true });
+  return projects.getDirectoryHandle(project.id, { create: true });
+}
+
+async function getProjectDirectories(handle: DirectoryHandleLike, project: ProjectManifest) {
+  const library = await handle.getDirectoryHandle("library", { create: true });
+  const projectDirectory = await getProjectDirectory(handle, project);
+  return {
+    library,
+    projectDirectory,
+    sources: await projectDirectory.getDirectoryHandle("sources", { create: true }),
+    work: await projectDirectory.getDirectoryHandle("work", { create: true }),
+    templates: await projectDirectory.getDirectoryHandle("templates", { create: true }),
+    outputs: await projectDirectory.getDirectoryHandle("outputs", { create: true }),
+  };
+}
+
+export async function saveProjectStateToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, sourceFiles: Map<string, File> = new Map()): Promise<void> {
+  await ensureWritePermission(handle);
+  const { library, projectDirectory, sources, work, templates } = await getProjectDirectories(handle, project);
 
   const workspace = workspaceManifestSchema.parse({ schemaVersion: SCHEMA_VERSION, activeProjectId: project.id, projects: [{ id: project.id, name: project.name, updatedAt: project.updatedAt }] });
   await writeFile(handle, "workspace.json", JSON.stringify(workspace, null, 2));
@@ -69,12 +126,23 @@ export async function saveProjectToDirectory(handle: DirectoryHandleLike, projec
     const file = sourceFiles.get(source.id);
     if (file) await writeFile(sources, source.name, file);
   }
+}
 
-  await writeFile(outputs, `${project.id}.md`, projectToMarkdown(project));
-  await writeFile(outputs, `${project.id}-requirements.csv`, projectToCsv(project));
-  await writeFile(outputs, `${project.id}.docx`, await projectToDocx(project));
-  await writeFile(outputs, `${project.id}.xlsx`, await projectToXlsx(project));
-  await writeFile(outputs, `${project.id}.pptx`, await projectToPptx(project));
+export async function saveGeneratedFileToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, name: string, content: Blob | string | ArrayBuffer): Promise<void> {
+  await ensureWritePermission(handle);
+  const projectDirectory = await getProjectDirectory(handle, project);
+  const outputs = await projectDirectory.getDirectoryHandle("outputs", { create: true });
+  await writeFile(outputs, name, content);
+}
+
+export async function saveProjectToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, sourceFiles: Map<string, File> = new Map()): Promise<void> {
+  await saveProjectStateToDirectory(handle, project, sourceFiles);
+
+  await saveGeneratedFileToDirectory(handle, project, `${project.id}.md`, projectToMarkdown(project));
+  await saveGeneratedFileToDirectory(handle, project, `${project.id}-requirements.csv`, projectToCsv(project));
+  await saveGeneratedFileToDirectory(handle, project, `${project.id}.docx`, await projectToDocx(project));
+  await saveGeneratedFileToDirectory(handle, project, `${project.id}.xlsx`, await projectToXlsx(project));
+  await saveGeneratedFileToDirectory(handle, project, `${project.id}.pptx`, await projectToPptx(project));
 }
 
 export async function loadActiveProject(handle: DirectoryHandleLike): Promise<ProjectManifest> {

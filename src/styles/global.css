@@ -103,6 +103,8 @@ textarea { padding: 11px; resize: vertical; }
 .workspace-toolbar button:disabled, .command-button:disabled, .output-actions button:disabled, .primary-export:disabled { opacity: .45; cursor: wait; }
 .workspace-toolbar span { font-size: 13px; }
 .workspace-toolbar .toolbar-spacer { margin-left: auto; }
+.workspace-toolbar .project-path-command.active { color: var(--teal); border-color: var(--teal); }
+.project-path-command span { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .workspace-shell { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 44px; align-items: start; margin-top: 34px; }
 .stage-rail { position: sticky; top: 94px; border-top: 1px solid var(--ink); }
