@@ -152,20 +152,24 @@ textarea { padding: 11px; resize: vertical; }
 .file-command, .inline-command { display: inline-flex; width: fit-content; min-height: 38px; align-items: center; gap: 7px; padding: 7px 9px; color: var(--teal); border: 1px solid var(--line); border-radius: 3px; background: transparent; cursor: pointer; font-size: 13px; font-weight: 700; }
 .file-command:hover, .inline-command:hover { color: #fff; border-color: var(--teal); background: var(--teal); }
 .round-source-list { display: flex; flex-wrap: wrap; gap: 5px; }
-.round-action-list { display: grid; gap: 7px; }
-.round-action-row { display: grid; grid-template-columns: 110px minmax(0, 1fr) 36px; grid-template-areas: "status title remove" "owner owner owner" "date date date" "response response response" "generate generate generate"; gap: 8px; padding: 0 0 14px; border-bottom: 1px solid var(--line); }
-.round-action-row > select { grid-area: status; }
-.round-action-row > input { grid-area: title; }
-.round-action-row > .field:nth-of-type(1) { grid-area: owner; }
-.round-action-row > .field:nth-of-type(2) { grid-area: date; }
-.round-action-row > .row-delete { grid-area: remove; }
-.round-action-row > .action-response-fields { grid-area: response; }
-.round-action-row > .action-generate { grid-area: generate; }
-.round-action-row input, .round-action-row select { min-height: 40px; font-size: 13px; }
-.round-action-row > .field > span { font-size: 12px; }
-.action-response-fields { display: grid; grid-template-columns: minmax(0, 1fr) 140px; gap: 8px; padding-top: 3px; }
+.round-action-list { display: grid; }
+.round-action-row { display: grid; gap: 10px; padding: 15px 0; border-bottom: 1px solid var(--line); }
+.round-action-row input, .round-action-row select { min-height: 42px; font-size: 14px; }
+.round-action-row textarea { min-height: 128px; line-height: 1.65; }
+.round-action-row > .field > span, .action-meta-fields .field > span { font-size: 12px; }
+.action-response-fields { display: grid; grid-template-columns: minmax(0, 1fr) 128px 36px; gap: 8px; align-items: end; }
 .action-response-fields .field > span { color: var(--signal); font-size: 12px; }
-.action-generate { min-height: 40px; margin-top: 2px; font-size: 13px; }
+.action-response-fields .row-delete { margin-bottom: 2px; }
+.action-meta-fields { display: grid; grid-template-columns: minmax(0, 1fr) 128px; gap: 8px; }
+.action-command-row, .bulk-action-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: center; }
+.bulk-action-row { padding: 14px 0 4px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.action-command-row .generate-command, .bulk-action-row .generate-command { min-width: 0; padding: 8px 7px; font-size: 13px; }
+.action-select { display: grid; width: 32px; height: 32px; place-items: center; cursor: pointer; }
+.action-select input { position: absolute; width: 1px; height: 1px; min-height: 0; opacity: 0; }
+.action-select > span { display: grid; width: 22px; height: 22px; place-items: center; color: transparent; border: 1px solid var(--line-strong); background: var(--surface); }
+.action-select input:checked + span { color: #fff; border-color: var(--signal); background: var(--signal); }
+.action-select input:focus-visible + span { outline: 2px solid var(--teal); outline-offset: 2px; }
+.action-select input:disabled + span { opacity: .45; cursor: not-allowed; }
 .round-reference-box { display: grid; gap: 9px; padding: 11px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
 .round-reference-box > strong { font-size: 13px; }
 .reference-checks { display: grid; gap: 6px; }
@@ -430,6 +434,10 @@ textarea { padding: 11px; resize: vertical; }
   .settings-page-actions a { min-width: 0; }
   .settings-footer { justify-content: stretch; }
   .settings-footer button { flex: 1; }
+  .action-response-fields { grid-template-columns: minmax(0, 1fr) 112px 34px; gap: 6px; }
+  .action-meta-fields { grid-template-columns: minmax(0, 1fr) 116px; gap: 6px; }
+  .action-command-row, .bulk-action-row { grid-template-columns: 32px minmax(0, 1fr) minmax(0, 1fr); gap: 6px; }
+  .action-command-row .generate-command, .bulk-action-row .generate-command { min-height: 46px; padding: 7px 4px; font-size: 12px; }
 }
 
 @media print {

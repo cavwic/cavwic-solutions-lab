@@ -11,11 +11,14 @@ function sourceText(source: SourceDocument): string {
 
 type ResponseFileFormat = "md" | "docx" | "pptx";
 
-export function getActionResponseTarget(round: PresalesRound, action: PresalesRoundAction): { name: string; format: ResponseFileFormat } {
+export function getActionResponseTarget(round: PresalesRound, action: PresalesRoundAction): { name: string; format: ResponseFileFormat | "" } {
   const isFirstAction = round.actions[0]?.id === action.id;
+  const hasActionFileFields = action.responseFileName !== undefined
+    || action.responseFileFormat !== undefined
+    || action.fileRequirements !== undefined;
   return {
-    name: action.responseFileName !== undefined ? action.responseFileName.trim() : (isFirstAction ? round.outputName.trim() : ""),
-    format: action.responseFileFormat || (isFirstAction ? round.outputFormat : "docx"),
+    name: action.responseFileName !== undefined ? action.responseFileName.trim() : (!hasActionFileFields && isFirstAction ? round.outputName.trim() : ""),
+    format: action.responseFileFormat || (!hasActionFileFields && isFirstAction ? round.outputFormat : ""),
   };
 }
 
@@ -29,12 +32,12 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
   const priorRounds = project.presalesRounds.slice(0, Math.max(0, roundIndex));
   const actions = round.actions.map((item) => {
     const response = getActionResponseTarget(round, item);
-    return `- [${item.status}] ${item.title} / ${item.owner || "unassigned"} / ${item.dueDate || "unscheduled"} / ${response.name || "response file pending"}.${response.format}`;
+    return `- [${item.status}] ${response.name || "response file pending"}${response.format ? `.${response.format}` : ""} / ${item.owner || "unassigned"} / ${item.dueDate || "unscheduled"}\n  File requirements: ${item.fileRequirements || item.title || "To confirm"}`;
   }).join("\n");
   const history = priorRounds.map((item) => [
     `### ${item.title} ${item.meetingAt}`,
     item.customerNeeds || "(no recorded customer need)",
-    item.actions.map((action) => `- ${action.title} [${action.status}]`).join("\n"),
+    item.actions.map((action) => { const response = getActionResponseTarget(item, action); return `- ${response.name || action.title || "response file pending"} [${action.status}]`; }).join("\n"),
     item.generatedFiles.map((file) => `- generated: ${file.name}`).join("\n"),
   ].filter(Boolean).join("\n")).join("\n\n");
   const references = selectedSources.map(sourceText).join("\n\n").slice(0, 60000);
@@ -47,10 +50,10 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
     `# 项目与边界\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n责任人：${project.owner || "待确认"}\n预算：${project.budget || "待确认"}\n截止日期：${project.deadline || "待确认"}\n业务目标：${project.objective || "待确认"}\n约束：${project.constraints || "待确认"}`,
     `# 本轮沟通\n节点：${round.title}\n时间：${round.meetingAt || "待确认"}\n客户信息及需求：\n${round.customerNeeds || "待确认"}`,
     `# 本轮执行清单\n${actions || "暂无"}`,
-    targetAction ? `# 当前响应文件\n执行项：${targetAction.title || "待填写"}\n责任人：${targetAction.owner || "待确认"}\n截止日期：${targetAction.dueDate || "待确认"}\n文件名：${target?.name || "待填写"}\n格式：${target?.format.toUpperCase()}` : "",
+    targetAction ? `# 当前响应文件\n文件名：${target?.name || "待填写"}\n格式：${target?.format ? target.format.toUpperCase() : "待选择"}\n责任人：${targetAction.owner || "待确认"}\n截止日期：${targetAction.dueDate || "待确认"}\n文件状态：${targetAction.status}\n文件要求：\n${targetAction.fileRequirements || targetAction.title || "待填写"}` : "",
     `# 之前轮次\n${history || "无"}`,
     `# 已选企业资料、客户附件与模板内容\n${references || "未选择资料"}`,
-    `# 文件生成要求\n${round.generationInstructions || "整理本轮需求、响应方案、边界、待确认项和后续行动。"}`,
+    `# 补充生成要求\n${round.generationInstructions || "无"}`,
   ].join("\n\n");
 
   return [
@@ -60,10 +63,10 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
     `# Project boundary\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nOwner: ${project.owner || "To confirm"}\nBudget: ${project.budget || "To confirm"}\nDeadline: ${project.deadline || "To confirm"}\nObjective: ${project.objective || "To confirm"}\nConstraints: ${project.constraints || "To confirm"}`,
     `# Current communication\nNode: ${round.title}\nTime: ${round.meetingAt || "To confirm"}\nCustomer information and needs:\n${round.customerNeeds || "To confirm"}`,
     `# Current action list\n${actions || "None"}`,
-    targetAction ? `# Current response file\nAction: ${targetAction.title || "To confirm"}\nOwner: ${targetAction.owner || "To confirm"}\nDue date: ${targetAction.dueDate || "To confirm"}\nFile name: ${target?.name || "To confirm"}\nFormat: ${target?.format.toUpperCase()}` : "",
+    targetAction ? `# Current response file\nFile name: ${target?.name || "To confirm"}\nFormat: ${target?.format ? target.format.toUpperCase() : "To select"}\nOwner: ${targetAction.owner || "To confirm"}\nDue date: ${targetAction.dueDate || "To confirm"}\nFile status: ${targetAction.status}\nFile requirements:\n${targetAction.fileRequirements || targetAction.title || "To confirm"}` : "",
     `# Previous rounds\n${history || "None"}`,
     `# Selected company materials, customer attachments, and template content\n${references || "No sources selected"}`,
-    `# Generation instructions\n${round.generationInstructions || "Summarize the need, proposed response, boundaries, open questions, and next actions."}`,
+    `# Additional generation instructions\n${round.generationInstructions || "None"}`,
   ].join("\n\n");
 }
 
@@ -107,6 +110,7 @@ export function safeGeneratedFileName(name: string, format: ResponseFileFormat):
 
 export function buildCodexPresalesTask(project: ProjectManifest, round: PresalesRound, action: PresalesRoundAction, locale: Locale = project.locale): { name: string; content: string; outputName: string } {
   const target = getActionResponseTarget(round, action);
+  if (!target.name || !target.format) throw new Error("RESPONSE_FILE_CONFIG_REQUIRED");
   const outputName = safeGeneratedFileName(target.name, target.format);
   const taskStem = outputName.replace(/\.[^.]+$/, "");
   const taskName = `presales-${round.id}-${action.id}-${taskStem}.md`.replace(/[\\/:*?"<>|]+/g, "-");

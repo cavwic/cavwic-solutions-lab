@@ -14,10 +14,11 @@ export type DirectoryHandleLike = {
 const HANDLE_DATABASE = "cavwic-solutions-lab";
 const HANDLE_STORE = "workspace-handles";
 const ACTIVE_HANDLE_KEY = "active-workspace";
+const TASK_OUTPUT_HANDLE_KEY = "task-output";
 
 declare global {
   interface Window {
-    showDirectoryPicker?: (options?: { mode?: "read" | "readwrite" }) => Promise<DirectoryHandleLike>;
+    showDirectoryPicker?: (options?: { mode?: "read" | "readwrite"; startIn?: DirectoryHandleLike }) => Promise<DirectoryHandleLike>;
   }
 }
 
@@ -39,13 +40,13 @@ function openHandleDatabase(): Promise<IDBDatabase> {
   });
 }
 
-export async function persistWorkspaceDirectory(handle: DirectoryHandleLike): Promise<void> {
+async function persistDirectoryHandle(key: string, handle: DirectoryHandleLike): Promise<void> {
   if (typeof indexedDB === "undefined") return;
   try {
     const database = await openHandleDatabase();
     await new Promise<void>((resolve, reject) => {
       const transaction = database.transaction(HANDLE_STORE, "readwrite");
-      transaction.objectStore(HANDLE_STORE).put(handle, ACTIVE_HANDLE_KEY);
+      transaction.objectStore(HANDLE_STORE).put(handle, key);
       transaction.oncomplete = () => resolve();
       transaction.onerror = () => reject(transaction.error);
     });
@@ -55,11 +56,11 @@ export async function persistWorkspaceDirectory(handle: DirectoryHandleLike): Pr
   }
 }
 
-export async function restoreWorkspaceDirectory(): Promise<DirectoryHandleLike | null> {
+async function restoreDirectoryHandle(key: string): Promise<DirectoryHandleLike | null> {
   if (typeof indexedDB === "undefined") return null;
   const database = await openHandleDatabase();
   const handle = await new Promise<DirectoryHandleLike | undefined>((resolve, reject) => {
-    const request = database.transaction(HANDLE_STORE, "readonly").objectStore(HANDLE_STORE).get(ACTIVE_HANDLE_KEY);
+    const request = database.transaction(HANDLE_STORE, "readonly").objectStore(HANDLE_STORE).get(key);
     request.onsuccess = () => resolve(request.result as DirectoryHandleLike | undefined);
     request.onerror = () => reject(request.error);
   });
@@ -67,6 +68,14 @@ export async function restoreWorkspaceDirectory(): Promise<DirectoryHandleLike |
   if (!handle) return null;
   const permission = await handle.queryPermission?.({ mode: "readwrite" });
   return permission === "granted" || permission === undefined ? handle : null;
+}
+
+export async function persistWorkspaceDirectory(handle: DirectoryHandleLike): Promise<void> {
+  return persistDirectoryHandle(ACTIVE_HANDLE_KEY, handle);
+}
+
+export async function restoreWorkspaceDirectory(): Promise<DirectoryHandleLike | null> {
+  return restoreDirectoryHandle(ACTIVE_HANDLE_KEY);
 }
 
 async function readJson(directory: DirectoryHandleLike, name: string): Promise<unknown> {
@@ -82,6 +91,14 @@ export function supportsDirectoryAccess(): boolean {
 export async function chooseWorkspaceDirectory(): Promise<DirectoryHandleLike> {
   if (!window.showDirectoryPicker) throw new Error("Directory access is not available in this browser.");
   return window.showDirectoryPicker({ mode: "readwrite" });
+}
+
+export async function chooseTaskOutputDirectory(fallbackStartIn?: DirectoryHandleLike | null): Promise<DirectoryHandleLike> {
+  if (!window.showDirectoryPicker) throw new Error("Directory access is not available in this browser.");
+  const remembered = await restoreDirectoryHandle(TASK_OUTPUT_HANDLE_KEY).catch(() => null);
+  const handle = await window.showDirectoryPicker({ mode: "readwrite", startIn: remembered || fallbackStartIn || undefined });
+  await persistDirectoryHandle(TASK_OUTPUT_HANDLE_KEY, handle);
+  return handle;
 }
 
 async function ensureWritePermission(handle: DirectoryHandleLike): Promise<void> {
@@ -142,6 +159,11 @@ export async function saveCodexTaskToDirectory(handle: DirectoryHandleLike, proj
   const tasks = await work.getDirectoryHandle("codex-tasks", { create: true });
   await writeFile(tasks, name, content);
   return `projects/${project.id}/work/codex-tasks/${name}`;
+}
+
+export async function saveTaskFileToDirectory(handle: DirectoryHandleLike, name: string, content: string): Promise<void> {
+  await ensureWritePermission(handle);
+  await writeFile(handle, name, content);
 }
 
 export async function readGeneratedFileFromDirectory(handle: DirectoryHandleLike, project: ProjectManifest, name: string): Promise<File> {

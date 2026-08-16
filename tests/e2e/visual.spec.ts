@@ -54,7 +54,10 @@ test("presales communication workspace remains readable", async ({ page }, testI
   await page.getByRole("button", { name: "新增执行项" }).click();
   await expect(page.getByRole("heading", { name: "客户沟通与文件响应" })).toBeVisible();
   await expect(page.getByLabel("响应文件格式")).toBeVisible();
-  await expect(page.getByRole("button", { name: "生成该项 Codex 任务" })).toBeVisible();
+  await expect(page.getByLabel("文件要求")).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成任务", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成文件", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "批量生成任务" })).toBeDisabled();
   await expectNoHorizontalOverflow(page);
   await page.locator(".round-action-row").first().screenshot({ path: testInfo.outputPath("presales-action-fields-zh.png") });
   await page.screenshot({ path: testInfo.outputPath("presales-rounds-zh.png"), fullPage: true });

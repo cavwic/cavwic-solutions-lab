@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildCodexPresalesTask, buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, requestPresalesDraft, safeGeneratedFileName } from "./presales-generation";
+import { buildCodexPresalesTask, buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, getActionResponseTarget, requestPresalesDraft, safeGeneratedFileName } from "./presales-generation";
 import { createEmptyProject } from "./workspace-schema";
 
 describe("presales generation", () => {
@@ -35,7 +35,7 @@ describe("presales generation", () => {
     const project = createEmptyProject("zh");
     const round = project.presalesRounds[0];
     round.customerNeeds = "生成客户响应文件";
-    const action = { id: "action-1", title: "确认接口范围", owner: "方案负责人", dueDate: "2026-09-01", status: "open" as const, responseFileName: "第一轮响应", responseFileFormat: "docx" as const };
+    const action = { id: "action-1", title: "", owner: "方案负责人", dueDate: "2026-09-01", status: "open" as const, responseFileName: "第一轮响应", responseFileFormat: "docx" as const, fileRequirements: "说明接口范围和待确认边界" };
     round.actions = [action];
     const task = buildCodexPresalesTask(project, round, action);
     expect(task.name).toMatch(/^presales-.+\.md$/);
@@ -44,6 +44,15 @@ describe("presales generation", () => {
     expect(task.content).toContain("provider 为 codex");
     expect(task.content).toContain("actionId 为 action-1");
     expect(task.content).toContain("生成客户响应文件");
+    expect(task.content).toContain("说明接口范围和待确认边界");
+  });
+
+  it("keeps new response items blank instead of inheriting the legacy round defaults", () => {
+    const project = createEmptyProject("zh");
+    const round = project.presalesRounds[0];
+    const action = { id: "action-new", title: "", owner: "", dueDate: "", status: "open" as const, responseFileName: "", fileRequirements: "" };
+    round.actions = [action];
+    expect(getActionResponseTarget(round, action)).toEqual({ name: "", format: "" });
   });
 
   it("creates a downloadable Markdown file", async () => {

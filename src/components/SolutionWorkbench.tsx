@@ -59,13 +59,14 @@ import {
 } from "../lib/model-settings";
 import {
   chooseWorkspaceDirectory,
+  chooseTaskOutputDirectory,
   importProjectArchive,
   loadActiveProject,
   persistWorkspaceDirectory,
   readGeneratedFileFromDirectory,
   restoreWorkspaceDirectory,
-  saveCodexTaskToDirectory,
   saveGeneratedFileToDirectory,
+  saveTaskFileToDirectory,
   saveProjectStateToDirectory,
   saveProjectToDirectory,
   supportsDirectoryAccess,
@@ -351,6 +352,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [modelSettings, setModelSettings] = useState<ModelSettings>(() => readModelSettings());
   const [apiKey, setApiKey] = useState("");
   const [generatingActionId, setGeneratingActionId] = useState("");
+  const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(new Set());
   const sourceInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
   const t = copy[locale];
@@ -499,15 +501,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const addRoundAction = (round: PresalesRound) => {
-    const actionIndex = round.actions.length + 1;
     const action: PresalesRoundAction = {
       id: createId("round-action"),
       title: "",
       owner: "",
       dueDate: "",
       status: "open",
-      responseFileName: locale === "zh" ? `第${actionIndex}项响应文件` : `action-${actionIndex}-response`,
-      responseFileFormat: "docx",
+      responseFileName: "",
+      fileRequirements: "",
     };
     updatePresalesRound(round.id, { actions: [...round.actions, action] });
   };
@@ -516,65 +517,121 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     actions: round.actions.map((action) => action.id === actionId ? { ...action, ...patch } : action),
   });
 
-  const generatePresalesFile = async (round: PresalesRound, action: PresalesRoundAction) => {
-    const target = getActionResponseTarget(round, action);
-    if (!target.name) {
-      setNotice(locale === "zh" ? "请先填写该执行项的响应文件名称。" : "Enter a response file name for this action first.");
-      return;
+  const checkedActions = (round: PresalesRound) => round.actions.filter((action) => selectedActionIds.has(action.id));
+
+  const setActionSelected = (actionId: string, checked: boolean) => setSelectedActionIds((current) => {
+    const next = new Set(current);
+    if (checked) next.add(actionId);
+    else next.delete(actionId);
+    return next;
+  });
+
+  const setRoundActionsSelected = (round: PresalesRound, checked: boolean) => setSelectedActionIds((current) => {
+    const next = new Set(current);
+    round.actions.forEach((action) => checked ? next.add(action.id) : next.delete(action.id));
+    return next;
+  });
+
+  const validateResponseActions = (round: PresalesRound, actions: PresalesRoundAction[]) => {
+    if (!actions.length) {
+      setNotice(locale === "zh" ? "请先勾选需要处理的响应文件。" : "Select at least one response file first.");
+      return false;
     }
-    setGeneratingActionId(action.id);
+    const incomplete = actions.find((action) => {
+      const target = getActionResponseTarget(round, action);
+      return !target.name || !target.format;
+    });
+    if (incomplete) {
+      setNotice(locale === "zh" ? "请先填写响应文件名称并选择文件格式。" : "Enter a response file name and select its format first.");
+      return false;
+    }
+    return true;
+  };
+
+  const generatePresalesTasks = async (round: PresalesRound, actions: PresalesRoundAction[]) => {
+    if (!validateResponseActions(round, actions)) return;
+    setGeneratingActionId(actions.length === 1 ? `task-${actions[0].id}` : `batch-task-${round.id}`);
     setBusy(true);
     try {
-      const prompt = buildPresalesPrompt(project, round, locale, action);
-      if (modelSettings.provider === "codex") {
-        const task = buildCodexPresalesTask(project, round, action, locale);
-        if (directoryHandle) {
-          const relativePath = await saveCodexTaskToDirectory(directoryHandle, project, task.name, task.content);
-          setNotice(locale === "zh" ? `Codex 任务已写入 ${relativePath}。请在 Codex 中执行，再到“输出与 Skills”重新扫描。` : `Codex task written to ${relativePath}. Run it in Codex, then rescan under Outputs and Skills.`);
-        } else {
-          downloadText(task.name, task.content, "text/markdown;charset=utf-8");
-          setNotice(locale === "zh" ? "Codex 任务已下载。建议先选择项目路径，以便 Codex 将结果写回同一项目。" : "Codex task downloaded. Choose a project folder first so Codex can write the result back to the same project.");
-        }
-        return;
+      const tasks = actions.map((action) => buildCodexPresalesTask(project, round, action, locale));
+      if (supportsDirectoryAccess()) {
+        const outputDirectory = await chooseTaskOutputDirectory(directoryHandle);
+        for (const task of tasks) await saveTaskFileToDirectory(outputDirectory, task.name, task.content);
+        setNotice(locale === "zh" ? `${tasks.length} 个独立任务文件已保存到“${outputDirectory.name}”。` : `${tasks.length} separate task file(s) saved to “${outputDirectory.name}”.`);
+      } else {
+        tasks.forEach((task) => downloadText(task.name, task.content, "text/markdown;charset=utf-8"));
+        setNotice(locale === "zh" ? `${tasks.length} 个独立任务文件已下载。` : `${tasks.length} separate task file(s) downloaded.`);
       }
-      const draft = await requestPresalesDraft(modelSettings, apiKey, prompt);
-      const generated = await createGeneratedFile(draft.content, target.name, target.format);
-      const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
-      const source = await parseSourceFile(generatedFile);
-      const record: PresalesGeneratedFile = {
-        id: createId("generated"),
-        name: generated.name,
-        format: target.format,
-        createdAt: new Date().toISOString(),
-        provider: draft.provider,
-        model: draft.model,
-        sourceId: source.id,
-        relativePath: `projects/${project.id}/outputs/${generated.name}`,
-        actionId: action.id,
-      };
-      const nextFiles = new Map(sourceFiles).set(source.id, generatedFile);
-      const nextProject = syncProjectStage({
-        ...project,
-        sources: [...project.sources, source],
-        presalesRounds: project.presalesRounds.map((item) => item.id === round.id ? { ...item, generatedFiles: [...item.generatedFiles, record] } : item),
-        updatedAt: new Date().toISOString(),
-      });
-      setProject(nextProject);
-      setSourceFiles(nextFiles);
-      setGeneratedBlobs((current) => new Map(current).set(record.id, generated.blob));
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") setNotice(locale === "zh" ? "已取消保存任务。" : "Task saving cancelled.");
+      else setNotice(locale === "zh" ? "任务文件保存失败，请重新选择可写目录。" : "Task files could not be saved. Select a writable folder and try again.");
+    } finally {
+      setBusy(false);
+      setGeneratingActionId("");
+    }
+  };
+
+  const hasCallableModel = modelSettings.provider !== "codex"
+    && Boolean((modelSettings.provider === "local" ? modelSettings.localEndpoint : modelSettings.cloudEndpoint).trim())
+    && Boolean((modelSettings.provider === "local" ? modelSettings.localModel : modelSettings.cloudModel).trim());
+
+  const generatePresalesFiles = async (round: PresalesRound, actions: PresalesRoundAction[]) => {
+    if (!validateResponseActions(round, actions)) return;
+    if (!hasCallableModel) {
+      window.alert(locale === "zh" ? "请先配置模型。" : "Configure a model first.");
+      return;
+    }
+    if (!window.confirm(locale === "zh" ? "是否使用模型生成该文件？" : "Use the configured model to generate this file?")) return;
+
+    setGeneratingActionId(actions.length === 1 ? `file-${actions[0].id}` : `batch-file-${round.id}`);
+    setBusy(true);
+    try {
+      let nextProject = project;
+      const nextFiles = new Map(sourceFiles);
+      const nextBlobs = new Map(generatedBlobs);
+      const pendingWrites: Array<{ name: string; blob: Blob }> = [];
+
+      for (const action of actions) {
+        const currentRound = nextProject.presalesRounds.find((item) => item.id === round.id) || round;
+        const target = getActionResponseTarget(currentRound, action);
+        if (!target.name || !target.format) throw new Error("RESPONSE_FILE_CONFIG_REQUIRED");
+        const prompt = buildPresalesPrompt(nextProject, currentRound, locale, action);
+        const draft = await requestPresalesDraft(modelSettings, apiKey, prompt);
+        const generated = await createGeneratedFile(draft.content, target.name, target.format);
+        const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
+        const source = await parseSourceFile(generatedFile);
+        const record: PresalesGeneratedFile = {
+          id: createId("generated"),
+          name: generated.name,
+          format: target.format,
+          createdAt: new Date().toISOString(),
+          provider: draft.provider,
+          model: draft.model,
+          sourceId: source.id,
+          relativePath: `projects/${project.id}/outputs/${generated.name}`,
+          actionId: action.id,
+        };
+        nextFiles.set(source.id, generatedFile);
+        nextBlobs.set(record.id, generated.blob);
+        pendingWrites.push({ name: generated.name, blob: generated.blob });
+        nextProject = syncProjectStage({
+          ...nextProject,
+          sources: [...nextProject.sources, source],
+          presalesRounds: nextProject.presalesRounds.map((item) => item.id === round.id ? { ...item, generatedFiles: [...item.generatedFiles, record] } : item),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
       if (directoryHandle) {
-        await saveGeneratedFileToDirectory(directoryHandle, nextProject, generated.name, generated.blob);
+        for (const file of pendingWrites) await saveGeneratedFileToDirectory(directoryHandle, nextProject, file.name, file.blob);
         await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
       }
-      setNotice(locale === "zh" ? `${generated.name} 已生成${directoryHandle ? "并写入项目目录" : ""}。` : `${generated.name} generated${directoryHandle ? " and written to the project folder" : ""}.`);
-    } catch (error) {
-      const code = error instanceof Error ? error.message : "";
-      const message = code === "MODEL_ENDPOINT_REQUIRED"
-        ? (locale === "zh" ? "请先填写模型接口地址。" : "Enter a model endpoint first.")
-        : code === "MODEL_NAME_REQUIRED"
-          ? (locale === "zh" ? "请先填写模型名称。" : "Enter a model name first.")
-          : (locale === "zh" ? "文件生成失败，请检查模型服务、跨域授权和接口配置。" : "Generation failed. Check the model service, CORS permission, and endpoint settings.");
-      setNotice(message);
+      setProject(nextProject);
+      setSourceFiles(nextFiles);
+      setGeneratedBlobs(nextBlobs);
+      setNotice(locale === "zh" ? `${pendingWrites.length} 个响应文件已生成${directoryHandle ? "并写入项目目录" : ""}。` : `${pendingWrites.length} response file(s) generated${directoryHandle ? " and written to the project folder" : ""}.`);
+    } catch {
+      setNotice(locale === "zh" ? "文件生成失败，请检查模型服务、跨域授权和接口配置。" : "Generation failed. Check the model service, CORS permission, and endpoint settings.");
     } finally {
       setBusy(false);
       setGeneratingActionId("");
@@ -745,29 +802,42 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
             </div>
             <div className="round-actions">
               <span className="round-cell-label">{locale === "zh" ? "执行清单与生成要求" : "Actions and generation request"}</span>
-              <div className="round-action-list">{round.actions.map((action) => <div className="round-action-row" key={action.id}>
-                <select aria-label={locale === "zh" ? "执行项状态" : "Action status"} value={action.status} onChange={(event) => updateRoundAction(round, action.id, { status: event.target.value as PresalesRoundAction["status"] })}>{Object.entries(actionStatusLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
-                <input aria-label={locale === "zh" ? "执行项" : "Action"} placeholder={locale === "zh" ? "执行项" : "Action"} value={action.title} onChange={(event) => updateRoundAction(round, action.id, { title: event.target.value })}/>
-                <Field label={t.owner}><input aria-label={t.owner} placeholder={t.owner} value={action.owner} onChange={(event) => updateRoundAction(round, action.id, { owner: event.target.value })}/></Field>
-                <Field label={locale === "zh" ? "时间" : "Date"}><input aria-label={locale === "zh" ? "时间" : "Date"} type="date" value={action.dueDate} onChange={(event) => updateRoundAction(round, action.id, { dueDate: event.target.value })}/></Field>
-                <div className="action-response-fields">
-                  <Field label={locale === "zh" ? "响应文件名称" : "Response file name"}><input aria-label={locale === "zh" ? "响应文件名称" : "Response file name"} value={getActionResponseTarget(round, action).name} onChange={(event) => updateRoundAction(round, action.id, { responseFileName: event.target.value })}/></Field>
-                  <Field label={locale === "zh" ? "响应文件格式" : "Response file format"}><select aria-label={locale === "zh" ? "响应文件格式" : "Response file format"} value={getActionResponseTarget(round, action).format} onChange={(event) => updateRoundAction(round, action.id, { responseFileFormat: event.target.value as NonNullable<PresalesRoundAction["responseFileFormat"]> })}><option value="docx">Word</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field>
-                </div>
-                <button className="generate-command action-generate" type="button" disabled={busy} onClick={() => void generatePresalesFile(round, action)}><Sparkles size={17}/>{generatingActionId === action.id ? (locale === "zh" ? "正在生成" : "Generating") : modelSettings.provider === "codex" ? (locale === "zh" ? "生成该项 Codex 任务" : "Create task for this action") : (locale === "zh" ? "生成该项响应文件" : "Generate response file")}</button>
-                <button className="row-delete" type="button" title={t.remove} aria-label={t.remove} onClick={() => updatePresalesRound(round.id, { actions: round.actions.filter((item) => item.id !== action.id) })}><Trash2 size={15}/></button>
-              </div>)}</div>
-              <button className="inline-command" type="button" onClick={() => addRoundAction(round)}><Plus size={15}/>{locale === "zh" ? "新增执行项" : "Add action"}</button>
               <div className="round-reference-box">
                 <strong>{locale === "zh" ? "本轮参考资料" : "References for this round"}</strong>
                 {referenceCandidates.length > 0 && <div className="reference-checks">{referenceCandidates.map((source) => source && <label key={source.id}><input type="checkbox" checked={round.referenceSourceIds.includes(source.id)} onChange={(event) => updatePresalesRound(round.id, { referenceSourceIds: event.target.checked ? [...new Set([...round.referenceSourceIds, source.id])] : round.referenceSourceIds.filter((id) => id !== source.id) })}/><span><Check size={13}/></span>{source.name}</label>)}</div>}
                 <label className="file-command"><Upload size={16}/>{locale === "zh" ? "导入其他参考文件" : "Import another reference"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.json" onChange={(event) => { void importPresalesFiles(event.target.files, { kind: "references", roundId: round.id }); event.currentTarget.value = ""; }}/></label>
               </div>
-              <textarea rows={5} aria-label={locale === "zh" ? "文件生成说明" : "File generation instructions"} placeholder={locale === "zh" ? "说明文件用途、结构、重点、语气、需继承的内容以及不得承诺的事项" : "Describe purpose, structure, priorities, tone, inherited content, and prohibited commitments"} value={round.generationInstructions} onChange={(event) => updatePresalesRound(round.id, { generationInstructions: event.target.value })}/>
+              <div className="round-action-list">{round.actions.map((action) => {
+                const target = getActionResponseTarget(round, action);
+                return <div className="round-action-row" key={action.id}>
+                  <div className="action-response-fields">
+                    <Field label={locale === "zh" ? "响应文件名称" : "Response file name"}><input aria-label={locale === "zh" ? "响应文件名称" : "Response file name"} value={target.name} onChange={(event) => updateRoundAction(round, action.id, { responseFileName: event.target.value })}/></Field>
+                    <Field label={locale === "zh" ? "响应文件格式" : "Response file format"}><select aria-label={locale === "zh" ? "响应文件格式" : "Response file format"} value={target.format} onChange={(event) => updateRoundAction(round, action.id, { responseFileFormat: event.target.value ? event.target.value as NonNullable<PresalesRoundAction["responseFileFormat"]> : undefined })}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field>
+                    <button className="row-delete" type="button" title={t.remove} aria-label={t.remove} onClick={() => { setActionSelected(action.id, false); updatePresalesRound(round.id, { actions: round.actions.filter((item) => item.id !== action.id) }); }}><Trash2 size={15}/></button>
+                  </div>
+                  <Field label={t.owner}><input aria-label={t.owner} placeholder={t.owner} value={action.owner} onChange={(event) => updateRoundAction(round, action.id, { owner: event.target.value })}/></Field>
+                  <div className="action-meta-fields">
+                    <Field label={locale === "zh" ? "时间" : "Date"}><input aria-label={locale === "zh" ? "时间" : "Date"} type="date" value={action.dueDate} onChange={(event) => updateRoundAction(round, action.id, { dueDate: event.target.value })}/></Field>
+                    <Field label={locale === "zh" ? "文件状态" : "File status"}><select aria-label={locale === "zh" ? "文件状态" : "File status"} value={action.status} onChange={(event) => updateRoundAction(round, action.id, { status: event.target.value as PresalesRoundAction["status"] })}>{Object.entries(actionStatusLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field>
+                  </div>
+                  <Field label={locale === "zh" ? "文件要求" : "File requirements"}><textarea rows={5} aria-label={locale === "zh" ? "文件要求" : "File requirements"} placeholder={locale === "zh" ? "说明文件格式、内容、参考模板、需继承的信息及不得承诺的事项" : "Describe formatting, content, reference templates, inherited information, and prohibited commitments"} value={action.fileRequirements || ""} onChange={(event) => updateRoundAction(round, action.id, { fileRequirements: event.target.value })}/></Field>
+                  <div className="action-command-row">
+                    <label className="action-select" title={locale === "zh" ? "选择该项" : "Select this item"}><input type="checkbox" aria-label={locale === "zh" ? `选择响应文件 ${target.name || "未命名"}` : `Select response file ${target.name || "unnamed"}`} checked={selectedActionIds.has(action.id)} onChange={(event) => setActionSelected(action.id, event.target.checked)}/><span><Check size={16}/></span></label>
+                    <button className="generate-command" type="button" disabled={busy} onClick={() => void generatePresalesTasks(round, [action])}><FileText size={17}/>{generatingActionId === `task-${action.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "生成任务" : "Generate task")}</button>
+                    <button className="generate-command" type="button" disabled={busy} onClick={() => void generatePresalesFiles(round, [action])}><Sparkles size={17}/>{generatingActionId === `file-${action.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "生成文件" : "Generate file")}</button>
+                  </div>
+                </div>;
+              })}</div>
+              <button className="inline-command" type="button" onClick={() => addRoundAction(round)}><Plus size={15}/>{locale === "zh" ? "新增执行项" : "Add action"}</button>
+              <div className="bulk-action-row">
+                <label className="action-select" title={locale === "zh" ? "选择本轮全部执行项" : "Select all actions in this round"}><input type="checkbox" aria-label={locale === "zh" ? "选择本轮全部执行项" : "Select all actions in this round"} disabled={!round.actions.length} checked={round.actions.length > 0 && round.actions.every((action) => selectedActionIds.has(action.id))} onChange={(event) => setRoundActionsSelected(round, event.target.checked)}/><span><Check size={16}/></span></label>
+                <button className="generate-command" type="button" disabled={busy || !checkedActions(round).length} onClick={() => void generatePresalesTasks(round, checkedActions(round))}><FileText size={17}/>{generatingActionId === `batch-task-${round.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "批量生成任务" : "Generate tasks")}</button>
+                <button className="generate-command" type="button" disabled={busy || !checkedActions(round).length} onClick={() => void generatePresalesFiles(round, checkedActions(round))}><Sparkles size={17}/>{generatingActionId === `batch-file-${round.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "批量生成文件" : "Generate files")}</button>
+              </div>
             </div>
             <div className="round-outputs">
               <span className="round-cell-label">{locale === "zh" ? "生成文件列表" : "Generated files"}</span>
-              {round.generatedFiles.length ? round.generatedFiles.map((file) => { const sourceAction = round.actions.find((action) => action.id === file.actionId); return <button className="generated-file" type="button" key={file.id} onClick={() => void openGeneratedFile(file)}><FileCheck2 size={18}/><span><strong>{file.name}</strong><small>{sourceAction?.title || (locale === "zh" ? "历史响应文件" : "Legacy response file")} · {new Date(file.createdAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")} · {file.provider} / {file.model}</small></span><ExternalLink size={15}/></button>; }) : <div className="round-empty"><FileOutput size={22}/><span>{locale === "zh" ? "本轮尚未生成文件" : "No files generated for this round"}</span></div>}
+              {round.generatedFiles.length ? round.generatedFiles.map((file) => { const sourceAction = round.actions.find((action) => action.id === file.actionId); const sourceName = sourceAction ? getActionResponseTarget(round, sourceAction).name : ""; return <button className="generated-file" type="button" key={file.id} onClick={() => void openGeneratedFile(file)}><FileCheck2 size={18}/><span><strong>{file.name}</strong><small>{sourceName || (locale === "zh" ? "历史响应文件" : "Legacy response file")} · {new Date(file.createdAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")} · {file.provider} / {file.model}</small></span><ExternalLink size={15}/></button>; }) : <div className="round-empty"><FileOutput size={22}/><span>{locale === "zh" ? "本轮尚未生成文件" : "No files generated for this round"}</span></div>}
             </div>
           </article>;
         })}

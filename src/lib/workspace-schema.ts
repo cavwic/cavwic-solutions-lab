@@ -159,6 +159,7 @@ export const presalesRoundActionSchema = z.object({
   status: z.enum(["open", "working", "blocked", "done"]),
   responseFileName: z.string().optional(),
   responseFileFormat: z.enum(["md", "docx", "pptx"]).optional(),
+  fileRequirements: z.string().optional(),
 });
 
 export const presalesGeneratedFileSchema = z.object({

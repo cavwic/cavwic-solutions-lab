@@ -84,8 +84,12 @@ export function validateProject(project: ProjectManifest, locale: Locale = proje
   }
   for (const round of project.presalesRounds) {
     for (const action of round.actions) {
-      if (action.status !== "done" && action.title.trim() && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的执行项“${action.title}”没有责任人。` : `Action "${action.title}" in "${round.title}" has no owner.` });
-      if (action.title.trim() && !getActionResponseTarget(round, action).name) issues.push({ id: `${action.id}-response-file`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的执行项“${action.title}”没有响应文件名称。` : `Action "${action.title}" in "${round.title}" has no response file name.` });
+      const target = getActionResponseTarget(round, action);
+      const configured = Boolean(target.name || target.format || action.owner.trim() || action.dueDate || action.fileRequirements?.trim() || action.title.trim());
+      const label = target.name || (zh ? "未命名响应文件" : "unnamed response file");
+      if (configured && action.status !== "done" && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的“${label}”没有项目责任人。` : `"${label}" in "${round.title}" has no project owner.` });
+      if (configured && !target.name) issues.push({ id: `${action.id}-response-file`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中有响应文件未填写名称。` : `A response file in "${round.title}" has no name.` });
+      if (configured && !target.format) issues.push({ id: `${action.id}-response-format`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的“${label}”未选择文件格式。` : `"${label}" in "${round.title}" has no file format.` });
     }
   }
   for (const section of project.sections) {
@@ -340,7 +344,7 @@ export function localizeBuiltInProject(project: ProjectManifest, locale: Locale)
     "name", "customerAlias", "industry", "owner", "budget", "objective", "constraints",
     "title", "originalText", "normalizedText", "scoreWeight", "locator", "excerpt", "formalResponse",
     "acceptanceCriteria", "notes", "text", "purpose", "demoScope", "acceptance",
-    "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName", "responseFileName",
+    "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName", "responseFileName", "fileRequirements",
   ]);
   const translations = new Map<string, string>();
 
