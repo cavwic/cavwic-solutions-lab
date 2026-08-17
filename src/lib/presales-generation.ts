@@ -34,13 +34,15 @@ export function buildCustomerNeedsAnalysisPrompt(
   const sourceContent = sources.map(sourceText).join("\n\n").slice(0, 60000);
   const templateContent = templates.map(sourceText).join("\n\n").slice(0, 24000);
   const keywords = round.keywords.filter(Boolean);
+  const participantLabels = locale === "zh" ? { customer: "客户", "third-party": "第三方", internal: "公司内人员" } : { customer: "Customer", "third-party": "Third party", internal: "Internal" };
+  const participants = round.participants.map((participant) => `${participant.name} (${participantLabels[participant.category]})`).join(", ");
   if (locale === "zh") return [
     "你是企业解决方案售前负责人。请分析所选客户附件，提炼后续沟通和方案编制需要使用的信息。",
     "所有结论必须能够回溯到附件内容。不得补写附件中不存在的参数、时间、资质、评分规则、价格或承诺；无法确认时写“待确认”。",
     keywords.length
       ? `在完整分析全部已选文件的基础上，提高以下关键词相关内容的检索和呈现权重：${keywords.join("、")}。不要忽略关键词以外的重要约束和风险。`
       : "未指定关键词。请分析已选文件全文，覆盖核心需求、范围、约束、时间、交付、验收、风险和待确认事项。",
-    `# 项目与沟通\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n沟通节点：${round.title}\n沟通时间：${round.meetingAt || "待确认"}`,
+    `# 项目与沟通\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n沟通节点：${round.title}\n沟通时间：${round.meetingAt || "待确认"}\n参会人员：${participants || "待确认"}`,
     `# 分析要求\n${round.analysisRequirements || "按事实提炼客户需求、关键约束、证据位置和待确认事项。"}`,
     `# 输出要求\n输出可直接进入人工审阅的 Markdown 正文。每个关键结论标注来源文件名和原始定位；扫描件或无可提取文本的文件标记为需要 OCR。${templates.length ? "参考所选模板的章节顺序、字段和表达方式组织内容，但不得因模板示例而补造客户事实。" : "未选择模板，请自行建立清晰、可复核的专业结构。"}`,
     `# 所选客户附件\n${sourceContent || "未选择附件"}`,
@@ -53,7 +55,7 @@ export function buildCustomerNeedsAnalysisPrompt(
     keywords.length
       ? `Analyze every selected file in full while giving extra retrieval and presentation weight to: ${keywords.join(", ")}. Do not omit material constraints or risks outside those keywords.`
       : "No keywords were supplied. Analyze the full selected files, covering needs, scope, constraints, schedule, delivery, acceptance, risks, and open questions.",
-    `# Project and communication\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nCommunication: ${round.title}\nTime: ${round.meetingAt || "To confirm"}`,
+    `# Project and communication\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nCommunication: ${round.title}\nTime: ${round.meetingAt || "To confirm"}\nParticipants: ${participants || "To confirm"}`,
     `# Analysis requirements\n${round.analysisRequirements || "Extract customer needs, key constraints, source locations, and open questions factually."}`,
     `# Output requirements\nReturn review-ready Markdown. Cite the source file and original locator for each material finding. Mark scanned or textless files as OCR required.${templates.length ? " Follow the selected template's section order, fields, and writing pattern without treating template examples as customer facts." : " No template is selected; create a clear, reviewable professional structure."}`,
     `# Selected customer attachments\n${sourceContent || "No attachments selected"}`,
@@ -92,13 +94,15 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
   ].filter(Boolean).join("\n")).join("\n\n");
   const references = selectedSources.map(sourceText).join("\n\n").slice(0, 60000);
   const target = targetAction ? getActionResponseTarget(round, targetAction) : null;
+  const participantLabels = locale === "zh" ? { customer: "客户", "third-party": "第三方", internal: "公司内人员" } : { customer: "Customer", "third-party": "Third party", internal: "Internal" };
+  const participants = round.participants.map((participant) => `${participant.name} (${participantLabels[participant.category]})`).join(", ");
 
   if (locale === "zh") return [
     "你是企业解决方案售前负责人。只根据以下项目边界、沟通记录和已选资料编制本轮客户响应文件。",
     "不得虚构产品参数、案例、承诺、价格、资质或交付能力。资料缺失时明确写“待确认”，并列出需要谁确认。",
     "输出可直接进入人工审阅的 Markdown 正文，不解释你的推理过程，不使用营销口号。",
     `# 项目与边界\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n责任人：${project.owner || "待确认"}\n预算：${project.budget || "待确认"}\n截止日期：${project.deadline || "待确认"}\n业务目标：${project.objective || "待确认"}\n约束：${project.constraints || "待确认"}`,
-    `# 本轮沟通\n节点：${round.title}\n时间：${round.meetingAt || "待确认"}\n客户信息及需求：\n${round.customerNeeds || "待确认"}`,
+    `# 本轮沟通\n节点：${round.title}\n时间：${round.meetingAt || "待确认"}\n参会人员：${participants || "待确认"}\n客户信息及需求：\n${round.customerNeeds || "待确认"}`,
     `# 本轮执行清单\n${actions || "暂无"}`,
     targetAction ? `# 当前响应文件\n文件名：${target?.name || "待填写"}\n格式：${target?.format ? target.format.toUpperCase() : "待选择"}\n责任人：${targetAction.owner || "待确认"}\n截止日期：${targetAction.dueDate || "待确认"}\n文件状态：${targetAction.status}\n文件要求：\n${targetAction.fileRequirements || targetAction.title || "待填写"}` : "",
     `# 之前轮次\n${history || "无"}`,
@@ -111,7 +115,7 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
     "Do not invent product parameters, references, commitments, prices, qualifications, or delivery capability. Mark missing facts as 'To confirm' and name the responsible party.",
     "Return review-ready Markdown only. Do not explain your reasoning or use promotional language.",
     `# Project boundary\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nOwner: ${project.owner || "To confirm"}\nBudget: ${project.budget || "To confirm"}\nDeadline: ${project.deadline || "To confirm"}\nObjective: ${project.objective || "To confirm"}\nConstraints: ${project.constraints || "To confirm"}`,
-    `# Current communication\nNode: ${round.title}\nTime: ${round.meetingAt || "To confirm"}\nCustomer information and needs:\n${round.customerNeeds || "To confirm"}`,
+    `# Current communication\nNode: ${round.title}\nTime: ${round.meetingAt || "To confirm"}\nParticipants: ${participants || "To confirm"}\nCustomer information and needs:\n${round.customerNeeds || "To confirm"}`,
     `# Current action list\n${actions || "None"}`,
     targetAction ? `# Current response file\nFile name: ${target?.name || "To confirm"}\nFormat: ${target?.format ? target.format.toUpperCase() : "To select"}\nOwner: ${targetAction.owner || "To confirm"}\nDue date: ${targetAction.dueDate || "To confirm"}\nFile status: ${targetAction.status}\nFile requirements:\n${targetAction.fileRequirements || targetAction.title || "To confirm"}` : "",
     `# Previous rounds\n${history || "None"}`,

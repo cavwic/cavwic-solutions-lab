@@ -99,6 +99,7 @@ import {
   type Locale,
   type PresalesGeneratedFile,
   type PresalesAnalysisResult,
+  type PresalesParticipant,
   type PresalesRound,
   type PresalesRoundAction,
   type ProjectManifest,
@@ -338,6 +339,10 @@ const recommendedAnalysisKeywords = {
   zh: ["技术参数", "评标办法", "时间", "进度", "资质"],
   en: ["Technical parameters", "Evaluation method", "Schedule", "Progress", "Qualifications"],
 } as const;
+const participantCategoryLabels = {
+  zh: { customer: "客户", "third-party": "第三方", internal: "公司内人员" },
+  en: { customer: "Customer", "third-party": "Third party", internal: "Internal" },
+} as const;
 
 function selectedCustomerSourceIds(round: PresalesRound): string[] {
   return round.selectedRequirementSourceIds ?? round.requirementSourceIds;
@@ -395,6 +400,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [keywordDrafts, setKeywordDrafts] = useState<Record<string, string>>({});
   const [analyzingRoundId, setAnalyzingRoundId] = useState("");
   const [expandedAnalysisId, setExpandedAnalysisId] = useState("");
+  const [participantDrafts, setParticipantDrafts] = useState<Record<string, { name: string; category: PresalesParticipant["category"] }>>({});
   const sourceInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
   const t = copy[locale];
@@ -634,6 +640,16 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       }
     }
     updatePresalesRound(round.id, { analysisOutputFormat: format || undefined });
+  };
+
+  const addRoundParticipant = (round: PresalesRound) => {
+    const draft = participantDrafts[round.id] || { name: "", category: "customer" as const };
+    const name = draft.name.trim();
+    if (!name || round.participants.some((participant) => participant.category === draft.category && participant.name === name)) return;
+    updatePresalesRound(round.id, {
+      participants: [...round.participants, { id: createId("participant"), name, category: draft.category }],
+    });
+    setParticipantDrafts((current) => ({ ...current, [round.id]: { ...draft, name: "" } }));
   };
 
   const addRoundAction = (round: PresalesRound) => {
@@ -1047,11 +1063,21 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           const customerSources = round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
           const selectedCustomerIds = selectedCustomerSourceIds(round);
           const templateSources = round.templateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
+          const participantDraft = participantDrafts[round.id] || { name: "", category: "customer" as const };
           return <article className="presales-round" key={round.id}>
             <div className="round-node">
               <span className="round-cell-label">{locale === "zh" ? "沟通节点" : "Communication"}</span>
               <input aria-label={locale === "zh" ? "沟通节点名称" : "Communication name"} value={round.title} onChange={(event) => updatePresalesRound(round.id, { title: event.target.value })}/>
               <input aria-label={locale === "zh" ? "沟通时间" : "Communication time"} type="datetime-local" value={round.meetingAt} onChange={(event) => updatePresalesRound(round.id, { meetingAt: event.target.value })}/>
+              <div className="participant-editor">
+                <strong>{locale === "zh" ? "参与沟通人员" : "Participants"}</strong>
+                <select aria-label={locale === "zh" ? "参会人员类别" : "Participant category"} value={participantDraft.category} onChange={(event) => setParticipantDrafts((current) => ({ ...current, [round.id]: { ...participantDraft, category: event.target.value as PresalesParticipant["category"] } }))}>{Object.entries(participantCategoryLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
+                <div className="participant-input-row"><input aria-label={locale === "zh" ? "参会人员" : "Participant name"} placeholder={locale === "zh" ? "输入姓名或角色" : "Name or role"} value={participantDraft.name} onChange={(event) => setParticipantDrafts((current) => ({ ...current, [round.id]: { ...participantDraft, name: event.target.value } }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addRoundParticipant(round); } }}/><button className="icon-command" type="button" aria-label={locale === "zh" ? "新增参会人员" : "Add participant"} title={locale === "zh" ? "新增参会人员" : "Add participant"} onClick={() => addRoundParticipant(round)}><Plus size={16}/></button></div>
+                {round.participants.length > 0 && <div className="participant-groups">{(["customer", "third-party", "internal"] as const).map((category) => {
+                  const participants = round.participants.filter((participant) => participant.category === category);
+                  return participants.length > 0 && <div key={category}><span>{participantCategoryLabels[locale][category]}</span><div>{participants.map((participant) => <span key={participant.id}>{participant.name}<button type="button" aria-label={locale === "zh" ? `删除参会人员 ${participant.name}` : `Delete participant ${participant.name}`} title={locale === "zh" ? "删除参会人员" : "Delete participant"} onClick={() => updatePresalesRound(round.id, { participants: round.participants.filter((item) => item.id !== participant.id) })}><X size={12}/></button></span>)}</div></div>;
+                })}</div>}
+              </div>
               <button className="row-delete" type="button" title={t.remove} aria-label={`${t.remove}: ${round.title}`} onClick={() => updateProject("presalesRounds", project.presalesRounds.filter((item) => item.id !== round.id))}><Trash2 size={17}/></button>
             </div>
             <div className="round-needs">

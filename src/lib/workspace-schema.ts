@@ -190,10 +190,17 @@ export const presalesAnalysisResultSchema = z.object({
   templateSourceIds: z.array(z.string()),
 });
 
+export const presalesParticipantSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  category: z.enum(["customer", "third-party", "internal"]),
+});
+
 export const presalesRoundSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   meetingAt: z.string(),
+  participants: z.array(presalesParticipantSchema).default([]),
   customerNeeds: z.string(),
   requirementSourceIds: z.array(z.string()),
   selectedRequirementSourceIds: z.array(z.string()).optional(),
@@ -271,6 +278,7 @@ export type EnterpriseContext = z.infer<typeof enterpriseContextSchema>;
 export type PresalesRoundAction = z.infer<typeof presalesRoundActionSchema>;
 export type PresalesGeneratedFile = z.infer<typeof presalesGeneratedFileSchema>;
 export type PresalesAnalysisResult = z.infer<typeof presalesAnalysisResultSchema>;
+export type PresalesParticipant = z.infer<typeof presalesParticipantSchema>;
 export type PresalesRound = z.infer<typeof presalesRoundSchema>;
 export type ProjectManifest = z.infer<typeof projectManifestSchema>;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
@@ -288,6 +296,7 @@ export function createPresalesRound(locale: Locale = "zh", index = 1): PresalesR
     id: createId("round"),
     title: locale === "zh" ? `第 ${index} 次沟通` : `Communication ${index}`,
     meetingAt: "",
+    participants: [],
     customerNeeds: "",
     requirementSourceIds: [],
     selectedRequirementSourceIds: [],

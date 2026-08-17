@@ -91,6 +91,31 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
   await expect(stage.locator("strong")).toHaveText("交底");
 });
 
+test("records communication participants by organization category", async ({ page }) => {
+  const node = page.locator(".presales-round").first().locator(".round-node");
+  await node.getByRole("textbox", { name: "参会人员", exact: true }).fill("客户项目经理");
+  await node.getByRole("button", { name: "新增参会人员" }).click();
+  await node.getByLabel("参会人员类别").selectOption("third-party");
+  await node.getByRole("textbox", { name: "参会人员", exact: true }).fill("咨询顾问");
+  await node.getByRole("button", { name: "新增参会人员" }).click();
+  await node.getByLabel("参会人员类别").selectOption("internal");
+  await node.getByRole("textbox", { name: "参会人员", exact: true }).fill("解决方案负责人");
+  await node.getByRole("button", { name: "新增参会人员" }).click();
+
+  await expect(node.locator(".participant-groups")).toContainText("客户");
+  await expect(node.locator(".participant-groups")).toContainText("第三方");
+  await expect(node.locator(".participant-groups")).toContainText("公司内人员");
+  await expect(node.getByText("客户项目经理", { exact: true })).toBeVisible();
+  await expect(node.getByText("咨询顾问", { exact: true })).toBeVisible();
+  await expect(node.getByText("解决方案负责人", { exact: true })).toBeVisible();
+  await node.getByRole("button", { name: "删除参会人员 咨询顾问" }).click();
+  await expect(node.getByText("咨询顾问", { exact: true })).toHaveCount(0);
+
+  await page.reload();
+  await expect(page.locator(".round-node").getByText("客户项目经理", { exact: true })).toBeVisible();
+  await expect(page.locator(".round-node").getByText("解决方案负责人", { exact: true })).toBeVisible();
+});
+
 test("manages presales communication rounds and generates a referenced file", async ({ page }) => {
   await expect(page.getByRole("button", { name: "导入企业信息" })).toHaveCount(0);
   await expect(page.getByText("POC 与定制演示")).toHaveCount(0);

@@ -53,6 +53,12 @@ test("presales communication workspace remains readable", async ({ page }, testI
   await page.reload();
   await page.getByRole("button", { name: "新增执行项" }).click();
   const round = page.locator(".presales-round").first();
+  const node = round.locator(".round-node");
+  await node.getByRole("textbox", { name: "参会人员", exact: true }).fill("客户项目经理");
+  await node.getByRole("button", { name: "新增参会人员" }).click();
+  await node.getByLabel("参会人员类别").selectOption("internal");
+  await node.getByRole("textbox", { name: "参会人员", exact: true }).fill("解决方案负责人");
+  await node.getByRole("button", { name: "新增参会人员" }).click();
   await round.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "客户技术要求.txt", mimeType: "text/plain", buffer: Buffer.from("额定负载 5 kg。") });
   await round.getByRole("button", { name: "技术参数", exact: true }).click();
   await round.getByLabel("分析要求").fill("提取参数并保留来源位置。");
@@ -66,6 +72,7 @@ test("presales communication workspace remains readable", async ({ page }, testI
   await expect(page.getByRole("button", { name: "生成文件", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "批量生成任务" })).toBeDisabled();
   await expectNoHorizontalOverflow(page);
+  await node.screenshot({ path: testInfo.outputPath("communication-participants-zh.png") });
   await round.locator(".round-needs").screenshot({ path: testInfo.outputPath("customer-analysis-config-zh.png") });
   await page.locator(".round-action-row").first().screenshot({ path: testInfo.outputPath("presales-action-fields-zh.png") });
   await page.screenshot({ path: testInfo.outputPath("presales-rounds-zh.png"), fullPage: true });

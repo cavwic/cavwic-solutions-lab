@@ -60,6 +60,7 @@ describe("presales generation", () => {
     const round = project.presalesRounds[0];
     round.keywords = ["技术参数"];
     round.analysisRequirements = "列出参数、来源位置和待确认项";
+    round.participants = [{ id: "participant-1", name: "客户项目经理", category: "customer" }];
     const source = { id: "source-1", name: "客户需求.md", fileType: "md" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-17", requiresOcr: false, segments: [{ id: "line-1", locatorKind: "line" as const, locator: "行 1", text: "额定负载 5 kg" }] };
     const template = { ...source, id: "template-1", name: "分析模板.md", segments: [{ ...source.segments[0], id: "template-line", text: "章节：技术要求" }] };
     const prompt = buildCustomerNeedsAnalysisPrompt(project, round, [source], [template]);
@@ -68,6 +69,7 @@ describe("presales generation", () => {
     expect(prompt).toContain("额定负载 5 kg");
     expect(prompt).toContain("列出参数、来源位置和待确认项");
     expect(prompt).toContain("章节：技术要求");
+    expect(prompt).toContain("客户项目经理 (客户)");
   });
 
   it("maps template extensions and analysis result names", () => {
