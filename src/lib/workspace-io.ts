@@ -7,6 +7,7 @@ export type DirectoryHandleLike = {
   name: string;
   getDirectoryHandle(name: string, options?: { create?: boolean }): Promise<DirectoryHandleLike>;
   getFileHandle(name: string, options?: { create?: boolean }): Promise<FileHandleLike>;
+  removeEntry?(name: string, options?: { recursive?: boolean }): Promise<void>;
   queryPermission?(descriptor?: { mode?: "read" | "readwrite" }): Promise<PermissionState>;
   requestPermission?(descriptor?: { mode?: "read" | "readwrite" }): Promise<PermissionState>;
 };
@@ -152,6 +153,21 @@ export async function saveGeneratedFileToDirectory(handle: DirectoryHandleLike, 
   await writeFile(outputs, name, content);
 }
 
+export async function saveAnalysisFileToDirectory(
+  handle: DirectoryHandleLike,
+  project: ProjectManifest,
+  folderName: string,
+  name: string,
+  content: Blob | string | ArrayBuffer,
+): Promise<string> {
+  await ensureWritePermission(handle);
+  const projectDirectory = await getProjectDirectory(handle, project);
+  const outputs = await projectDirectory.getDirectoryHandle("outputs", { create: true });
+  const analysisDirectory = await outputs.getDirectoryHandle(folderName, { create: true });
+  await writeFile(analysisDirectory, name, content);
+  return `projects/${project.id}/outputs/${folderName}/${name}`;
+}
+
 export async function saveCodexTaskToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, name: string, content: string): Promise<string> {
   await ensureWritePermission(handle);
   const projectDirectory = await getProjectDirectory(handle, project);
@@ -170,6 +186,22 @@ export async function readGeneratedFileFromDirectory(handle: DirectoryHandleLike
   const projectDirectory = await getProjectDirectory(handle, project);
   const outputs = await projectDirectory.getDirectoryHandle("outputs");
   return outputs.getFileHandle(name).then((fileHandle) => fileHandle.getFile());
+}
+
+export async function readWorkspaceFileFromRelativePath(handle: DirectoryHandleLike, relativePath: string): Promise<File> {
+  const parts = relativePath.split("/").filter(Boolean);
+  if (parts.length < 2 || parts.some((part) => part === "." || part === "..")) throw new Error("Invalid workspace file path.");
+  let directory = handle;
+  for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+  return directory.getFileHandle(parts.at(-1) as string).then((fileHandle) => fileHandle.getFile());
+}
+
+export async function removeWorkspaceFileFromRelativePath(handle: DirectoryHandleLike, relativePath: string): Promise<void> {
+  const parts = relativePath.split("/").filter(Boolean);
+  if (parts.length < 2 || parts.some((part) => part === "." || part === "..")) throw new Error("Invalid workspace file path.");
+  let directory = handle;
+  for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+  if (directory.removeEntry) await directory.removeEntry(parts.at(-1) as string);
 }
 
 export async function saveProjectToDirectory(handle: DirectoryHandleLike, project: ProjectManifest, sourceFiles: Map<string, File> = new Map()): Promise<void> {

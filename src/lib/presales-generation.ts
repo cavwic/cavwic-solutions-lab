@@ -9,7 +9,57 @@ function sourceText(source: SourceDocument): string {
   return `## ${source.name}\n${text.slice(0, 16000) || "(no extractable text)"}`;
 }
 
-type ResponseFileFormat = "md" | "docx" | "pptx";
+export type ResponseFileFormat = "md" | "docx" | "pptx";
+
+export function templateFileFormat(name: string): ResponseFileFormat | null {
+  const extension = name.toLowerCase().split(".").pop();
+  if (extension === "docx") return "docx";
+  if (extension === "pptx") return "pptx";
+  if (extension === "md" || extension === "markdown") return "md";
+  return null;
+}
+
+export function analysisResultBaseName(keywords: string[], locale: Locale): string {
+  if (!keywords.length) return locale === "zh" ? "整体分析结果" : "Overall analysis result";
+  return locale === "zh" ? `${keywords.join("+")}分析结果` : `${keywords.join("+")} analysis result`;
+}
+
+export function buildCustomerNeedsAnalysisPrompt(
+  project: ProjectManifest,
+  round: PresalesRound,
+  sources: SourceDocument[],
+  templates: SourceDocument[],
+  locale: Locale = project.locale,
+): string {
+  const sourceContent = sources.map(sourceText).join("\n\n").slice(0, 60000);
+  const templateContent = templates.map(sourceText).join("\n\n").slice(0, 24000);
+  const keywords = round.keywords.filter(Boolean);
+  if (locale === "zh") return [
+    "你是企业解决方案售前负责人。请分析所选客户附件，提炼后续沟通和方案编制需要使用的信息。",
+    "所有结论必须能够回溯到附件内容。不得补写附件中不存在的参数、时间、资质、评分规则、价格或承诺；无法确认时写“待确认”。",
+    keywords.length
+      ? `在完整分析全部已选文件的基础上，提高以下关键词相关内容的检索和呈现权重：${keywords.join("、")}。不要忽略关键词以外的重要约束和风险。`
+      : "未指定关键词。请分析已选文件全文，覆盖核心需求、范围、约束、时间、交付、验收、风险和待确认事项。",
+    `# 项目与沟通\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n沟通节点：${round.title}\n沟通时间：${round.meetingAt || "待确认"}`,
+    `# 分析要求\n${round.analysisRequirements || "按事实提炼客户需求、关键约束、证据位置和待确认事项。"}`,
+    `# 输出要求\n输出可直接进入人工审阅的 Markdown 正文。每个关键结论标注来源文件名和原始定位；扫描件或无可提取文本的文件标记为需要 OCR。${templates.length ? "参考所选模板的章节顺序、字段和表达方式组织内容，但不得因模板示例而补造客户事实。" : "未选择模板，请自行建立清晰、可复核的专业结构。"}`,
+    `# 所选客户附件\n${sourceContent || "未选择附件"}`,
+    `# 所选模板\n${templateContent || "未选择模板"}`,
+  ].join("\n\n");
+
+  return [
+    "You are the presales solution owner. Analyze the selected customer attachments and extract information needed for follow-up communication and solution preparation.",
+    "Every conclusion must be traceable to the attachments. Do not invent parameters, dates, qualifications, scoring rules, prices, or commitments. Mark unsupported facts as To confirm.",
+    keywords.length
+      ? `Analyze every selected file in full while giving extra retrieval and presentation weight to: ${keywords.join(", ")}. Do not omit material constraints or risks outside those keywords.`
+      : "No keywords were supplied. Analyze the full selected files, covering needs, scope, constraints, schedule, delivery, acceptance, risks, and open questions.",
+    `# Project and communication\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nCommunication: ${round.title}\nTime: ${round.meetingAt || "To confirm"}`,
+    `# Analysis requirements\n${round.analysisRequirements || "Extract customer needs, key constraints, source locations, and open questions factually."}`,
+    `# Output requirements\nReturn review-ready Markdown. Cite the source file and original locator for each material finding. Mark scanned or textless files as OCR required.${templates.length ? " Follow the selected template's section order, fields, and writing pattern without treating template examples as customer facts." : " No template is selected; create a clear, reviewable professional structure."}`,
+    `# Selected customer attachments\n${sourceContent || "No attachments selected"}`,
+    `# Selected templates\n${templateContent || "No templates selected"}`,
+  ].join("\n\n");
+}
 
 export function getActionResponseTarget(round: PresalesRound, action: PresalesRoundAction): { name: string; format: ResponseFileFormat | "" } {
   const isFirstAction = round.actions[0]?.id === action.id;
@@ -75,7 +125,7 @@ export async function requestPresalesDraft(
   apiKey: string,
   prompt: string,
   fetcher: typeof fetch = fetch,
-): Promise<{ content: string; model: string; provider: ModelProvider }> {
+): Promise<{ content: string; model: string; provider: Exclude<ModelProvider, "codex"> }> {
   if (settings.provider === "codex") throw new Error("CODEX_WORKFLOW_SELECTED");
   const endpoint = settings.provider === "local" ? settings.localEndpoint : settings.cloudEndpoint;
   const model = settings.provider === "local" ? settings.localModel : settings.cloudModel;

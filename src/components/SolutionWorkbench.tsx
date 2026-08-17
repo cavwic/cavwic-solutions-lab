@@ -30,6 +30,7 @@ import {
   Sun,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -46,11 +47,15 @@ import {
 import { parseSourceFile } from "../lib/parsers";
 import {
   buildCodexPresalesTask,
+  buildCustomerNeedsAnalysisPrompt,
   buildPresalesPrompt,
+  analysisResultBaseName,
   createGeneratedFile,
   getActionResponseTarget,
   requestPresalesDraft,
+  templateFileFormat,
   type ModelSettings,
+  type ResponseFileFormat,
 } from "../lib/presales-generation";
 import {
   MODEL_SETTINGS_CHANGED_EVENT,
@@ -64,8 +69,11 @@ import {
   loadActiveProject,
   persistWorkspaceDirectory,
   readGeneratedFileFromDirectory,
+  readWorkspaceFileFromRelativePath,
+  removeWorkspaceFileFromRelativePath,
   restoreWorkspaceDirectory,
   saveGeneratedFileToDirectory,
+  saveAnalysisFileToDirectory,
   saveTaskFileToDirectory,
   saveProjectStateToDirectory,
   saveProjectToDirectory,
@@ -90,6 +98,7 @@ import {
   type EvidenceRef,
   type Locale,
   type PresalesGeneratedFile,
+  type PresalesAnalysisResult,
   type PresalesRound,
   type PresalesRoundAction,
   type ProjectManifest,
@@ -325,6 +334,36 @@ const issueAreaLabels = {
   zh: { project: "项目", source: "来源", requirement: "要求", evidence: "证据", action: "任务", deliverable: "交付物", section: "章节" },
   en: { project: "Project", source: "Source", requirement: "Requirement", evidence: "Evidence", action: "Action", deliverable: "Deliverable", section: "Section" },
 } as const;
+const recommendedAnalysisKeywords = {
+  zh: ["技术参数", "评标办法", "时间", "进度", "资质"],
+  en: ["Technical parameters", "Evaluation method", "Schedule", "Progress", "Qualifications"],
+} as const;
+
+function selectedCustomerSourceIds(round: PresalesRound): string[] {
+  return round.selectedRequirementSourceIds ?? round.requirementSourceIds;
+}
+
+function uniqueAnalysisResultName(baseName: string, results: PresalesAnalysisResult[]): string {
+  if (!results.some((result) => result.name === baseName)) return baseName;
+  let index = 2;
+  while (results.some((result) => result.name === `${baseName}-${index}`)) index += 1;
+  return `${baseName}-${index}`;
+}
+
+function safeDirectoryName(value: string): string {
+  return value.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "").slice(0, 80);
+}
+
+function sourceIsReferenced(project: ProjectManifest, sourceId: string): boolean {
+  return project.enterpriseContext.sourceIds.includes(sourceId)
+    || project.requirements.some((item) => item.sourceRef?.documentId === sourceId)
+    || project.evidence.some((item) => item.sourceRef?.documentId === sourceId)
+    || project.presalesRounds.some((round) => round.requirementSourceIds.includes(sourceId)
+      || round.referenceSourceIds.includes(sourceId)
+      || round.templateSourceIds.includes(sourceId)
+      || round.generatedFiles.some((file) => file.sourceId === sourceId)
+      || round.analysisResults.some((result) => result.sourceId === sourceId || result.sourceIds.includes(sourceId) || result.templateSourceIds.includes(sourceId)));
+}
 
 function downloadText(name: string, content: string, type: string): void {
   downloadBlob(name, new Blob([content], { type }));
@@ -353,6 +392,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [apiKey, setApiKey] = useState("");
   const [generatingActionId, setGeneratingActionId] = useState("");
   const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(new Set());
+  const [keywordDrafts, setKeywordDrafts] = useState<Record<string, string>>({});
+  const [analyzingRoundId, setAnalyzingRoundId] = useState("");
+  const [expandedAnalysisId, setExpandedAnalysisId] = useState("");
   const sourceInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
   const t = copy[locale];
@@ -467,7 +509,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   };
 
-  const importPresalesFiles = async (files: FileList | null, target: { kind: "requirements" | "references"; roundId: string }) => {
+  const importPresalesFiles = async (files: FileList | null, target: { kind: "requirements" | "references" | "templates"; roundId: string }) => {
     if (!files?.length) return;
     setBusy(true);
     setNotice(`${t.parsing}…`);
@@ -483,21 +525,115 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const nextProject = syncProjectStage({
         ...project,
         sources: [...project.sources, ...parsed],
-        presalesRounds: project.presalesRounds.map((round) => round.id === target.roundId ? {
-          ...round,
-          [target.kind === "requirements" ? "requirementSourceIds" : "referenceSourceIds"]: [...new Set([...(target.kind === "requirements" ? round.requirementSourceIds : round.referenceSourceIds), ...sourceIds])],
-        } : round),
+        presalesRounds: project.presalesRounds.map((round) => {
+          if (round.id !== target.roundId) return round;
+          if (target.kind === "requirements") return {
+            ...round,
+            requirementSourceIds: [...new Set([...round.requirementSourceIds, ...sourceIds])],
+            selectedRequirementSourceIds: [...new Set([...selectedCustomerSourceIds(round), ...sourceIds])],
+          };
+          if (target.kind === "templates") return {
+            ...round,
+            templateSourceIds: [...new Set([...round.templateSourceIds, ...sourceIds])],
+          };
+          return {
+            ...round,
+            referenceSourceIds: [...new Set([...round.referenceSourceIds, ...sourceIds])],
+          };
+        }),
         updatedAt: new Date().toISOString(),
       } as ProjectManifest);
       setProject(nextProject);
       setSourceFiles(nextFiles);
       if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
-      setNotice(locale === "zh" ? `${parsed.length} 个售前资料已导入。` : `${parsed.length} presales source files imported.`);
+      setNotice(locale === "zh" ? `${parsed.length} 个文件已导入。` : `${parsed.length} file(s) imported.`);
     } catch {
       setNotice(t.invalid);
     } finally {
       setBusy(false);
     }
+  };
+
+  const toggleCustomerSource = (round: PresalesRound, sourceId: string, checked: boolean) => {
+    const selected = selectedCustomerSourceIds(round);
+    updatePresalesRound(round.id, {
+      selectedRequirementSourceIds: checked ? [...new Set([...selected, sourceId])] : selected.filter((id) => id !== sourceId),
+    });
+  };
+
+  const selectAllCustomerSources = (round: PresalesRound, checked: boolean) => updatePresalesRound(round.id, {
+    selectedRequirementSourceIds: checked ? [...round.requirementSourceIds] : [],
+  });
+
+  const removePresalesSource = async (round: PresalesRound, sourceId: string, kind: "requirements" | "templates") => {
+    const source = project.sources.find((item) => item.id === sourceId);
+    const nextRounds = project.presalesRounds.map((item) => {
+      if (item.id !== round.id) return item;
+      if (kind === "requirements") return {
+        ...item,
+        requirementSourceIds: item.requirementSourceIds.filter((id) => id !== sourceId),
+        selectedRequirementSourceIds: selectedCustomerSourceIds(item).filter((id) => id !== sourceId),
+      };
+      return {
+        ...item,
+        templateSourceIds: item.templateSourceIds.filter((id) => id !== sourceId),
+        selectedTemplateSourceIds: item.selectedTemplateSourceIds.filter((id) => id !== sourceId),
+      };
+    });
+    const detachedProject = syncProjectStage({ ...project, presalesRounds: nextRounds, updatedAt: new Date().toISOString() });
+    const removeSource = !sourceIsReferenced(detachedProject, sourceId);
+    const nextProject = removeSource ? { ...detachedProject, sources: detachedProject.sources.filter((item) => item.id !== sourceId) } : detachedProject;
+    const nextFiles = new Map(sourceFiles);
+    if (removeSource) nextFiles.delete(sourceId);
+    setProject(nextProject);
+    setSourceFiles(nextFiles);
+    if (directoryHandle && removeSource && source) {
+      await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => undefined);
+      await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+    }
+  };
+
+  const addAnalysisKeyword = (round: PresalesRound, value: string) => {
+    const keyword = value.trim();
+    if (!keyword || round.keywords.includes(keyword)) return;
+    updatePresalesRound(round.id, { keywords: [...round.keywords, keyword] });
+    setKeywordDrafts((current) => ({ ...current, [round.id]: "" }));
+  };
+
+  const alertTemplateMismatch = (sourceName: string, format: ResponseFileFormat) => {
+    const target = format === "docx" ? "Word" : format === "pptx" ? "PPT" : "Markdown";
+    window.alert(locale === "zh"
+      ? `模板“${sourceName}”与 ${target} 输出格式不匹配，请更换模板或输出格式。`
+      : `Template “${sourceName}” does not match the ${target} output format. Choose another template or output format.`);
+  };
+
+  const toggleAnalysisTemplate = (round: PresalesRound, sourceId: string) => {
+    const selected = round.selectedTemplateSourceIds.includes(sourceId);
+    if (!selected && round.analysisOutputFormat) {
+      const source = project.sources.find((item) => item.id === sourceId);
+      if (source && templateFileFormat(source.name) !== round.analysisOutputFormat) {
+        alertTemplateMismatch(source.name, round.analysisOutputFormat);
+        return;
+      }
+    }
+    updatePresalesRound(round.id, {
+      selectedTemplateSourceIds: selected
+        ? round.selectedTemplateSourceIds.filter((id) => id !== sourceId)
+        : [...round.selectedTemplateSourceIds, sourceId],
+    });
+  };
+
+  const setAnalysisOutputFormat = (round: PresalesRound, format: ResponseFileFormat | "") => {
+    if (format) {
+      const mismatch = round.selectedTemplateSourceIds
+        .map((id) => project.sources.find((source) => source.id === id))
+        .find((source) => source && templateFileFormat(source.name) !== format);
+      if (mismatch) {
+        alertTemplateMismatch(mismatch.name, format);
+        return;
+      }
+    }
+    updatePresalesRound(round.id, { analysisOutputFormat: format || undefined });
   };
 
   const addRoundAction = (round: PresalesRound) => {
@@ -574,6 +710,127 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const hasCallableModel = modelSettings.provider !== "codex"
     && Boolean((modelSettings.provider === "local" ? modelSettings.localEndpoint : modelSettings.cloudEndpoint).trim())
     && Boolean((modelSettings.provider === "local" ? modelSettings.localModel : modelSettings.cloudModel).trim());
+
+  const analyzeCustomerSources = async (round: PresalesRound) => {
+    if (!round.requirementSourceIds.length) return;
+    const sourceIds = selectedCustomerSourceIds(round);
+    if (!sourceIds.length) {
+      window.alert(locale === "zh" ? "请先选择需要分析的客户附件。" : "Select at least one customer attachment to analyze.");
+      return;
+    }
+    if (!round.analysisOutputFormat) {
+      window.alert(locale === "zh" ? "请先选择分析结果的文件格式。" : "Select an output format for the analysis result.");
+      return;
+    }
+    const selectedTemplates = round.selectedTemplateSourceIds
+      .map((id) => project.sources.find((source) => source.id === id))
+      .filter((source): source is NonNullable<typeof source> => Boolean(source));
+    const mismatch = selectedTemplates.find((source) => templateFileFormat(source.name) !== round.analysisOutputFormat);
+    if (mismatch) {
+      alertTemplateMismatch(mismatch.name, round.analysisOutputFormat);
+      return;
+    }
+    if (!hasCallableModel) {
+      localStorage.setItem("cavwic-solution-workspace", JSON.stringify({ ...project, updatedAt: new Date().toISOString() }));
+      const returnPath = `${base}/`;
+      window.location.href = `${base}/model-settings?return=${encodeURIComponent(returnPath)}`;
+      return;
+    }
+
+    const selectedSources = sourceIds
+      .map((id) => project.sources.find((source) => source.id === id))
+      .filter((source): source is NonNullable<typeof source> => Boolean(source));
+    setAnalyzingRoundId(round.id);
+    setBusy(true);
+    try {
+      const prompt = buildCustomerNeedsAnalysisPrompt(project, round, selectedSources, selectedTemplates, locale);
+      const draft = await requestPresalesDraft(modelSettings, apiKey, prompt);
+      const baseName = analysisResultBaseName(round.keywords, locale);
+      const resultName = uniqueAnalysisResultName(baseName, round.analysisResults);
+      const generated = await createGeneratedFile(draft.content, resultName, round.analysisOutputFormat);
+      const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
+      const source = await parseSourceFile(generatedFile);
+      const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
+      const folderName = safeDirectoryName(locale === "zh"
+        ? `售前阶段-第${roundIndex + 1}次沟通-分析要求`
+        : `Presales-Communication-${roundIndex + 1}-Analysis`);
+      const relativePath = directoryHandle
+        ? await saveAnalysisFileToDirectory(directoryHandle, project, folderName, generated.name, generated.blob)
+        : `downloads/${generated.name}`;
+      const record: PresalesAnalysisResult = {
+        id: createId("analysis"),
+        name: resultName,
+        fileName: generated.name,
+        format: round.analysisOutputFormat,
+        createdAt: new Date().toISOString(),
+        provider: draft.provider,
+        model: draft.model,
+        sourceId: source.id,
+        relativePath,
+        prompt: round.analysisRequirements,
+        keywords: [...round.keywords],
+        sourceIds: [...sourceIds],
+        templateSourceIds: [...round.selectedTemplateSourceIds],
+      };
+      const nextFiles = new Map(sourceFiles).set(source.id, generatedFile);
+      const nextProject = syncProjectStage({
+        ...project,
+        sources: [...project.sources, source],
+        presalesRounds: project.presalesRounds.map((item) => item.id === round.id ? { ...item, analysisResults: [...item.analysisResults, record] } : item),
+        updatedAt: new Date().toISOString(),
+      });
+      setProject(nextProject);
+      setSourceFiles(nextFiles);
+      setGeneratedBlobs((current) => new Map(current).set(record.id, generated.blob));
+      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
+      else downloadBlob(generated.name, generated.blob);
+      setNotice(locale === "zh"
+        ? `${resultName}已生成${directoryHandle ? `并保存到 ${relativePath}` : "并下载"}。`
+        : `${resultName} generated${directoryHandle ? ` and saved to ${relativePath}` : " and downloaded"}.`);
+    } catch {
+      setNotice(locale === "zh" ? "需求分析失败，请检查模型服务、跨域授权和接口配置。" : "Analysis failed. Check the model service, CORS permission, and endpoint settings.");
+    } finally {
+      setBusy(false);
+      setAnalyzingRoundId("");
+    }
+  };
+
+  const openAnalysisResult = async (result: PresalesAnalysisResult) => {
+    try {
+      const file = generatedBlobs.get(result.id)
+        || sourceFiles.get(result.sourceId)
+        || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, result.relativePath) : null);
+      if (!file) throw new Error("FILE_NOT_AVAILABLE");
+      if (result.format === "md") {
+        const url = URL.createObjectURL(file);
+        window.open(url, "_blank", "noopener,noreferrer");
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } else downloadBlob(result.fileName, file);
+    } catch {
+      setNotice(locale === "zh" ? "找不到该分析文件，请重新选择项目路径。" : "The analysis file is unavailable. Select the project folder again.");
+    }
+  };
+
+  const removeAnalysisResult = async (round: PresalesRound, result: PresalesAnalysisResult) => {
+    const nextRounds = project.presalesRounds.map((item) => item.id === round.id
+      ? { ...item, analysisResults: item.analysisResults.filter((entry) => entry.id !== result.id) }
+      : item);
+    const detachedProject = syncProjectStage({ ...project, presalesRounds: nextRounds, updatedAt: new Date().toISOString() });
+    const removeSource = !sourceIsReferenced(detachedProject, result.sourceId);
+    const nextProject = removeSource ? { ...detachedProject, sources: detachedProject.sources.filter((source) => source.id !== result.sourceId) } : detachedProject;
+    const nextFiles = new Map(sourceFiles);
+    const nextBlobs = new Map(generatedBlobs);
+    if (removeSource) nextFiles.delete(result.sourceId);
+    nextBlobs.delete(result.id);
+    setProject(nextProject);
+    setSourceFiles(nextFiles);
+    setGeneratedBlobs(nextBlobs);
+    if (expandedAnalysisId === result.id) setExpandedAnalysisId("");
+    if (directoryHandle) {
+      await removeWorkspaceFileFromRelativePath(directoryHandle, result.relativePath).catch(() => undefined);
+      await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+    }
+  };
 
   const generatePresalesFiles = async (round: PresalesRound, actions: PresalesRoundAction[]) => {
     if (!validateResponseActions(round, actions)) return;
@@ -787,6 +1044,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           const priorGeneratedIds = project.presalesRounds.slice(0, roundIndex + 1).flatMap((item) => item.generatedFiles.map((file) => file.sourceId));
           const candidateIds = [...new Set([...priorGeneratedIds, ...round.referenceSourceIds])];
           const referenceCandidates = candidateIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
+          const customerSources = round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
+          const selectedCustomerIds = selectedCustomerSourceIds(round);
+          const templateSources = round.templateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
           return <article className="presales-round" key={round.id}>
             <div className="round-node">
               <span className="round-cell-label">{locale === "zh" ? "沟通节点" : "Communication"}</span>
@@ -796,9 +1056,31 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
             </div>
             <div className="round-needs">
               <span className="round-cell-label">{locale === "zh" ? "客户信息及需求" : "Customer information and needs"}</span>
-              <textarea rows={9} placeholder={locale === "zh" ? "记录本轮确认的需求、预算、工期、参与人和待确认项" : "Record needs, budget, schedule, participants, and open questions"} value={round.customerNeeds} onChange={(event) => updatePresalesRound(round.id, { customerNeeds: event.target.value })}/>
               <label className="file-command"><Upload size={16}/>{locale === "zh" ? "导入客户附件" : "Import customer attachments"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.json" onChange={(event) => { void importPresalesFiles(event.target.files, { kind: "requirements", roundId: round.id }); event.currentTarget.value = ""; }}/></label>
-              <div className="round-source-list">{round.requirementSourceIds.map((sourceId) => <span key={sourceId}><FileText size={14}/>{project.sources.find((source) => source.id === sourceId)?.name || sourceId}</span>)}</div>
+              {customerSources.length > 0 && <div className="customer-source-panel">
+                <div className="analysis-panel-heading"><strong>{locale === "zh" ? "已导入客户附件" : "Imported customer attachments"}</strong><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? "全选客户附件" : "Select all customer attachments"} checked={round.requirementSourceIds.every((id) => selectedCustomerIds.includes(id))} onChange={(event) => selectAllCustomerSources(round, event.target.checked)}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label></div>
+                <div className="customer-source-list">{customerSources.map((source) => source && <div key={source.id}>
+                  <label><input type="checkbox" aria-label={locale === "zh" ? `选择客户附件 ${source.name}` : `Select customer attachment ${source.name}`} checked={selectedCustomerIds.includes(source.id)} onChange={(event) => toggleCustomerSource(round, source.id, event.target.checked)}/><span><Check size={13}/></span><FileText size={15}/><strong>{source.name}</strong></label>
+                  <button className="row-delete" type="button" title={locale === "zh" ? "删除客户附件" : "Delete customer attachment"} aria-label={locale === "zh" ? `删除客户附件 ${source.name}` : `Delete customer attachment ${source.name}`} onClick={() => void removePresalesSource(round, source.id, "requirements")}><Trash2 size={15}/></button>
+                </div>)}</div>
+              </div>}
+              <div className="analysis-config-block keyword-config">
+                <strong>{locale === "zh" ? "关键词" : "Keywords"}</strong>
+                <div className="keyword-input-row"><input aria-label={locale === "zh" ? "新增关键词" : "New keyword"} value={keywordDrafts[round.id] || ""} onChange={(event) => setKeywordDrafts((current) => ({ ...current, [round.id]: event.target.value }))} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addAnalysisKeyword(round, keywordDrafts[round.id] || ""); } }}/><button className="icon-command" type="button" aria-label={locale === "zh" ? "添加关键词" : "Add keyword"} title={locale === "zh" ? "添加关键词" : "Add keyword"} onClick={() => addAnalysisKeyword(round, keywordDrafts[round.id] || "")}><Plus size={17}/></button></div>
+                <div className="recommended-keywords"><span>{locale === "zh" ? "推荐关键词" : "Recommended"}</span><div>{recommendedAnalysisKeywords[locale].map((keyword) => <button type="button" key={keyword} disabled={round.keywords.includes(keyword)} onClick={() => addAnalysisKeyword(round, keyword)}>{keyword}</button>)}</div></div>
+                {round.keywords.length > 0 && <div className="selected-keywords">{round.keywords.map((keyword) => <span key={keyword}>{keyword}<button type="button" aria-label={locale === "zh" ? `删除关键词 ${keyword}` : `Delete keyword ${keyword}`} title={locale === "zh" ? "删除关键词" : "Delete keyword"} onClick={() => updatePresalesRound(round.id, { keywords: round.keywords.filter((item) => item !== keyword) })}><X size={13}/></button></span>)}</div>}
+              </div>
+              <Field label={locale === "zh" ? "分析要求" : "Analysis requirements"}><textarea rows={5} aria-label={locale === "zh" ? "分析要求" : "Analysis requirements"} placeholder={locale === "zh" ? "输入模型分析时需要遵循的提示词、重点和输出要求" : "Enter the prompt, priorities, and output requirements for the model"} value={round.analysisRequirements} onChange={(event) => updatePresalesRound(round.id, { analysisRequirements: event.target.value })}/></Field>
+              <div className="analysis-config-block template-config">
+                <label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传模板" : "Upload templates"}<input hidden multiple type="file" accept=".docx,.pptx,.md" onChange={(event) => { void importPresalesFiles(event.target.files, { kind: "templates", roundId: round.id }); event.currentTarget.value = ""; }}/></label>
+                {templateSources.length > 0 && <div className="template-source-list">{templateSources.map((source) => source && <div className={round.selectedTemplateSourceIds.includes(source.id) ? "selected" : ""} key={source.id}><button type="button" aria-pressed={round.selectedTemplateSourceIds.includes(source.id)} onClick={() => toggleAnalysisTemplate(round, source.id)}><FileText size={15}/><span>{source.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除模板 ${source.name}` : `Delete template ${source.name}`} title={locale === "zh" ? "删除模板" : "Delete template"} onClick={() => void removePresalesSource(round, source.id, "templates")}><X size={14}/></button></div>)}</div>}
+                <Field label={locale === "zh" ? "文件格式" : "Output format"}><select aria-label={locale === "zh" ? "分析结果文件格式" : "Analysis result output format"} value={round.analysisOutputFormat || ""} onChange={(event) => setAnalysisOutputFormat(round, event.target.value as ResponseFileFormat | "")}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field>
+              </div>
+              <button className="generate-command analysis-command" type="button" disabled={busy || !round.requirementSourceIds.length} onClick={() => void analyzeCustomerSources(round)}><Sparkles size={17}/>{analyzingRoundId === round.id ? (locale === "zh" ? "正在分析" : "Analyzing") : (locale === "zh" ? "需求分析" : "Analyze requirements")}</button>
+              {round.analysisResults.length > 0 && <div className="analysis-result-list"><strong>{locale === "zh" ? "分析结果" : "Analysis results"}</strong>{round.analysisResults.map((result) => <article className={expandedAnalysisId === result.id ? "expanded" : ""} key={result.id}>
+                <div><button type="button" onClick={() => { updatePresalesRound(round.id, { analysisRequirements: result.prompt }); setExpandedAnalysisId(expandedAnalysisId === result.id ? "" : result.id); }}><FileCheck2 size={16}/><span>{result.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除分析结果 ${result.name}` : `Delete analysis result ${result.name}`} title={locale === "zh" ? "删除分析结果" : "Delete analysis result"} onClick={() => void removeAnalysisResult(round, result)}><X size={14}/></button></div>
+                {expandedAnalysisId === result.id && <button className="open-analysis-file" type="button" onClick={() => void openAnalysisResult(result)}><ExternalLink size={15}/>{locale === "zh" ? `打开文件 · ${result.fileName}` : `Open file · ${result.fileName}`}</button>}
+              </article>)}</div>}
             </div>
             <div className="round-actions">
               <span className="round-cell-label">{locale === "zh" ? "执行清单与生成要求" : "Actions and generation request"}</span>

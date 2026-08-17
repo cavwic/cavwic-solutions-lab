@@ -174,12 +174,35 @@ export const presalesGeneratedFileSchema = z.object({
   actionId: z.string().default(""),
 });
 
+export const presalesAnalysisResultSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  fileName: z.string().min(1),
+  format: z.enum(["md", "docx", "pptx"]),
+  createdAt: z.string(),
+  provider: z.enum(["local", "cloud"]),
+  model: z.string(),
+  sourceId: z.string(),
+  relativePath: z.string(),
+  prompt: z.string(),
+  keywords: z.array(z.string()),
+  sourceIds: z.array(z.string()),
+  templateSourceIds: z.array(z.string()),
+});
+
 export const presalesRoundSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
   meetingAt: z.string(),
   customerNeeds: z.string(),
   requirementSourceIds: z.array(z.string()),
+  selectedRequirementSourceIds: z.array(z.string()).optional(),
+  keywords: z.array(z.string()).default([]),
+  analysisRequirements: z.string().default(""),
+  templateSourceIds: z.array(z.string()).default([]),
+  selectedTemplateSourceIds: z.array(z.string()).default([]),
+  analysisOutputFormat: z.enum(["md", "docx", "pptx"]).optional(),
+  analysisResults: z.array(presalesAnalysisResultSchema).default([]),
   actions: z.array(presalesRoundActionSchema),
   referenceSourceIds: z.array(z.string()),
   generationInstructions: z.string(),
@@ -247,6 +270,7 @@ export type SolutionSection = z.infer<typeof solutionSectionSchema>;
 export type EnterpriseContext = z.infer<typeof enterpriseContextSchema>;
 export type PresalesRoundAction = z.infer<typeof presalesRoundActionSchema>;
 export type PresalesGeneratedFile = z.infer<typeof presalesGeneratedFileSchema>;
+export type PresalesAnalysisResult = z.infer<typeof presalesAnalysisResultSchema>;
 export type PresalesRound = z.infer<typeof presalesRoundSchema>;
 export type ProjectManifest = z.infer<typeof projectManifestSchema>;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
@@ -266,6 +290,12 @@ export function createPresalesRound(locale: Locale = "zh", index = 1): PresalesR
     meetingAt: "",
     customerNeeds: "",
     requirementSourceIds: [],
+    selectedRequirementSourceIds: [],
+    keywords: [],
+    analysisRequirements: "",
+    templateSourceIds: [],
+    selectedTemplateSourceIds: [],
+    analysisResults: [],
     actions: [],
     referenceSourceIds: [],
     generationInstructions: "",

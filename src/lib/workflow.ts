@@ -7,7 +7,7 @@ import {
   type ProjectStage,
   type Requirement,
 } from "./workspace-schema";
-import { getActionResponseTarget } from "./presales-generation";
+import { getActionResponseTarget, templateFileFormat } from "./presales-generation";
 
 export type ValidationIssue = {
   id: string;
@@ -83,6 +83,14 @@ export function validateProject(project: ProjectManifest, locale: Locale = proje
     if (action.status !== "done" && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `任务“${action.title}”没有责任人。` : `Action "${action.title}" has no owner.` });
   }
   for (const round of project.presalesRounds) {
+    const selectedCustomerIds = round.selectedRequirementSourceIds ?? round.requirementSourceIds;
+    if (round.requirementSourceIds.length && !selectedCustomerIds.length) issues.push({ id: `${round.id}-customer-source-selection`, severity: "warning", area: "source", targetId: round.id, message: zh ? `“${round.title}”已导入客户附件，但没有选择待分析文件。` : `"${round.title}" has imported customer attachments but none are selected for analysis.` });
+    if (round.analysisOutputFormat) {
+      const mismatch = round.selectedTemplateSourceIds
+        .map((id) => project.sources.find((source) => source.id === id))
+        .find((source) => source && templateFileFormat(source.name) !== round.analysisOutputFormat);
+      if (mismatch) issues.push({ id: `${round.id}-template-format`, severity: "warning", area: "source", targetId: round.id, message: zh ? `模板“${mismatch.name}”与当前分析输出格式不匹配。` : `Template "${mismatch.name}" does not match the current analysis output format.` });
+    }
     for (const action of round.actions) {
       const target = getActionResponseTarget(round, action);
       const configured = Boolean(target.name || target.format || action.owner.trim() || action.dueDate || action.fileRequirements?.trim() || action.title.trim());
@@ -344,7 +352,7 @@ export function localizeBuiltInProject(project: ProjectManifest, locale: Locale)
     "name", "customerAlias", "industry", "owner", "budget", "objective", "constraints",
     "title", "originalText", "normalizedText", "scoreWeight", "locator", "excerpt", "formalResponse",
     "acceptanceCriteria", "notes", "text", "purpose", "demoScope", "acceptance",
-    "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName", "responseFileName", "fileRequirements",
+    "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName", "responseFileName", "fileRequirements", "analysisRequirements", "prompt",
   ]);
   const translations = new Map<string, string>();
 

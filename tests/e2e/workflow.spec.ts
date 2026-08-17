@@ -103,7 +103,7 @@ test("manages presales communication rounds and generates a referenced file", as
   await page.getByRole("link", { name: "返回工作台" }).click();
 
   const firstRound = page.locator(".presales-round").first();
-  await firstRound.locator(".round-needs textarea").fill("客户本轮需要响应需求 A，并保留待确认边界。");
+  await firstRound.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "customer-brief.txt", mimeType: "text/plain", buffer: Buffer.from("客户本轮需要响应需求 A，并保留待确认边界。") });
   await firstRound.locator(".round-reference-box input[type=file]").setInputFiles({ name: "product-introduction.txt", mimeType: "text/plain", buffer: Buffer.from("产品支持审计日志和人工复核。") });
   await firstRound.getByRole("button", { name: "新增执行项" }).click();
   const firstAction = firstRound.locator(".round-action-row").first();
@@ -170,6 +170,108 @@ test("keeps only the final project actions in the workspace toolbar", async ({ p
   await expect(toolbar.getByRole("button", { name: "项目路径" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: /示例/ })).toHaveCount(0);
   await expect(page.getByText("本地工作区路径提示")).toHaveCount(0);
+});
+
+test("returns from model configuration to the pending customer analysis", async ({ page }) => {
+  const round = page.locator(".presales-round").first();
+  await round.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "客户资料.txt", mimeType: "text/plain", buffer: Buffer.from("项目工期为 90 天。") });
+  await round.getByLabel("分析结果文件格式").selectOption("md");
+  await round.getByRole("button", { name: "需求分析" }).click();
+  await expect(page).toHaveURL(/\/model-settings\?return=/);
+
+  await page.getByRole("button", { name: "本机或内网接口" }).click();
+  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9010/v1/chat/completions");
+  await page.getByLabel("模型名称").fill("analysis-model");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(page).toHaveURL(/\/cavwic-solutions-lab\/$/);
+  await expect(page.getByText("客户资料.txt")).toBeVisible();
+  await expect(page.getByLabel("分析结果文件格式")).toHaveValue("md");
+});
+
+test("analyzes selected customer attachments with keywords and a matching template", async ({ page }) => {
+  await page.getByRole("link", { name: /模型配置/ }).click();
+  await page.getByRole("button", { name: "本机或内网接口" }).click();
+  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9011/v1/chat/completions");
+  await page.getByLabel("模型名称").fill("customer-analysis-model");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await page.getByRole("link", { name: "返回工作台" }).click();
+
+  await page.evaluate(() => {
+    const writes: string[] = [];
+    class MemoryDirectory {
+      name: string;
+      path: string;
+      directories = new Map<string, MemoryDirectory>();
+      constructor(name: string, path = "") { this.name = name; this.path = path || name; }
+      async queryPermission() { return "granted" as PermissionState; }
+      async requestPermission() { return "granted" as PermissionState; }
+      async getDirectoryHandle(name: string) {
+        if (!this.directories.has(name)) this.directories.set(name, new MemoryDirectory(name, `${this.path}/${name}`));
+        return this.directories.get(name)!;
+      }
+      async getFileHandle(name: string) {
+        const path = `${this.path}/${name}`;
+        return { async getFile() { return new File([], name); }, async createWritable() { return { async write() { writes.push(path); }, async close() {} }; } };
+      }
+      async removeEntry() {}
+    }
+    (window as typeof window & { __analysisWrites?: string[] }).__analysisWrites = writes;
+    const root = new MemoryDirectory("客户需求项目");
+    window.showDirectoryPicker = async () => root as never;
+  });
+  await page.getByRole("button", { name: "项目路径" }).click();
+
+  const round = page.locator(".presales-round").first();
+  await round.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles([
+    { name: "客户技术要求.txt", mimeType: "text/plain", buffer: Buffer.from("额定负载 5 kg，交付时间待确认。") },
+    { name: "删除资料.txt", mimeType: "text/plain", buffer: Buffer.from("这段内容不应出现在分析请求中。") },
+  ]);
+  await expect(round.locator(".customer-source-list > div")).toHaveCount(2);
+  await expect(round.getByLabel("全选客户附件")).toBeChecked();
+  await round.getByRole("button", { name: "删除客户附件 删除资料.txt" }).click();
+  await expect(round.locator(".customer-source-list > div")).toHaveCount(1);
+
+  await round.getByRole("button", { name: "技术参数", exact: true }).click();
+  await round.getByLabel("新增关键词").fill("临时关键词");
+  await round.getByRole("button", { name: "添加关键词" }).click();
+  await round.getByRole("button", { name: "删除关键词 临时关键词" }).click();
+  await round.getByLabel("新增关键词").fill("自定义");
+  await round.getByRole("button", { name: "添加关键词" }).click();
+  await round.getByLabel("分析要求").fill("只列出技术参数、来源位置和待确认项。");
+
+  await round.locator("label.file-command", { hasText: "上传模板" }).locator("input[type=file]").setInputFiles({ name: "分析模板.md", mimeType: "text/markdown", buffer: Buffer.from("# 技术参数\n\n# 来源\n\n# 待确认项") });
+  await round.locator(".template-source-list > div > button:first-child").click();
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("输出格式不匹配");
+    await dialog.accept();
+  });
+  await round.getByLabel("分析结果文件格式").selectOption("pptx");
+  await expect(round.getByLabel("分析结果文件格式")).toHaveValue("");
+  await round.getByLabel("分析结果文件格式").selectOption("md");
+
+  await page.route("http://127.0.0.1:9011/v1/chat/completions", async (route) => {
+    const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
+    const prompt = request.messages[1].content;
+    expect(prompt).toContain("额定负载 5 kg");
+    expect(prompt).not.toContain("这段内容不应出现在分析请求中");
+    expect(prompt).toContain("技术参数");
+    expect(prompt).toContain("自定义");
+    expect(prompt).toContain("只列出技术参数、来源位置和待确认项");
+    expect(prompt).toContain("# 待确认项");
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 技术参数\n\n- 额定负载：5 kg（客户技术要求.txt，行 1）\n\n# 待确认项\n\n- 交付时间" } }] }) });
+  });
+  await round.getByRole("button", { name: "需求分析" }).click();
+  await expect(round.getByText("技术参数+自定义分析结果", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => ((window as typeof window & { __analysisWrites?: string[] }).__analysisWrites || [])
+    .some((path) => /客户需求项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/outputs\/售前阶段-第1次沟通-分析要求\/技术参数\+自定义分析结果\.md$/.test(path))))
+    .toBe(true);
+
+  await round.getByLabel("分析要求").fill("新的临时要求");
+  await round.locator(".analysis-result-list article > div > button:first-child").click();
+  await expect(round.getByLabel("分析要求")).toHaveValue("只列出技术参数、来源位置和待确认项。");
+  await expect(round.getByRole("button", { name: /打开文件 · 技术参数\+自定义分析结果\.md/ })).toBeVisible();
+  await round.getByRole("button", { name: "删除分析结果 技术参数+自定义分析结果" }).click();
+  await expect(round.getByText("技术参数+自定义分析结果", { exact: true })).toHaveCount(0);
 });
 
 test("requires a callable model before generating a response file", async ({ page }) => {

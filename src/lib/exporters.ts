@@ -52,6 +52,7 @@ export function presentationMarkdown(project: ProjectManifest): string {
     `## ${round.title} ${round.meetingAt}`,
     round.customerNeeds || "客户需求待确认",
     round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `- ${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.status}\n  文件要求：${item.fileRequirements || item.title || "待填写"}`; }).join("\n"),
+    round.analysisResults.map((result) => `- 附件分析：${result.name} / ${result.fileName}`).join("\n"),
     round.generatedFiles.map((file) => `- 已生成: ${file.name}`).join("\n"),
   ].filter(Boolean).join("\n\n")).join("\n\n");
   const slides = [
@@ -79,6 +80,10 @@ export function projectToMarkdown(project: ProjectManifest): string {
       `- 客户信息及需求: ${round.customerNeeds || "待确认"}`,
       `- 客户附件: ${round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join(", ") || "无"}`,
       `- 参考资料: ${round.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join(", ") || "无"}`,
+      `- 分析关键词: ${round.keywords.join("、") || "无，执行全文分析"}`,
+      `- 分析要求: ${round.analysisRequirements || "按全文分析"}`,
+      `- 分析模板: ${round.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join(", ") || "无"}`,
+      `- 分析结果: ${round.analysisResults.map((result) => `${result.name}（${result.fileName}）`).join(", ") || "无"}`,
       `- 生成文件: ${round.generatedFiles.map((file) => file.name).join(", ") || "无"}`,
       round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `  - [${item.status === "done" ? "x" : " "}] ${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}\n    文件要求：${item.fileRequirements || item.title || "待填写"}`; }).join("\n"),
     ].filter(Boolean).join("\n")).join("\n\n") || "尚无沟通记录。"}`,
@@ -132,6 +137,9 @@ export async function projectToDocx(project: ProjectManifest): Promise<Blob> {
         new Paragraph({ text: round.title, heading: HeadingLevel.HEADING_2 }),
         new Paragraph({ text: `沟通时间：${round.meetingAt || "待确认"}` }),
         new Paragraph({ text: `客户信息及需求：${round.customerNeeds || "待确认"}` }),
+        new Paragraph({ text: `分析关键词：${round.keywords.join("、") || "无，执行全文分析"}` }),
+        new Paragraph({ text: `分析要求：${round.analysisRequirements || "按全文分析"}` }),
+        ...round.analysisResults.map((result) => new Paragraph({ text: `附件分析：${result.name} / ${result.fileName}`, bullet: { level: 0 } })),
         ...round.actions.flatMap((item) => { const response = getActionResponseTarget(round, item); return [new Paragraph({ text: `${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"} / ${item.status}`, bullet: { level: 0 } }), new Paragraph({ text: `文件要求：${item.fileRequirements || item.title || "待填写"}` })]; }),
         new Paragraph({ text: `生成文件：${round.generatedFiles.map((file) => file.name).join("、") || "无"}` }),
       ]),
@@ -165,13 +173,17 @@ export async function projectToXlsx(project: ProjectManifest): Promise<Blob> {
   project.actions.forEach((item) => actions.addRow(item));
 
   const presales = workbook.addWorksheet("售前沟通记录", { views: [{ state: "frozen", ySplit: 1 }] });
-  presales.columns = [{ header: "沟通节点", key: "title", width: 24 }, { header: "沟通时间", key: "meetingAt", width: 22 }, { header: "客户信息及需求", key: "customerNeeds", width: 52 }, { header: "响应文件清单", key: "actions", width: 72 }, { header: "客户附件", key: "requirements", width: 36 }, { header: "参考资料", key: "references", width: 36 }, { header: "生成文件", key: "outputs", width: 36 }];
+  presales.columns = [{ header: "沟通节点", key: "title", width: 24 }, { header: "沟通时间", key: "meetingAt", width: 22 }, { header: "历史需求记录", key: "customerNeeds", width: 40 }, { header: "响应文件清单", key: "actions", width: 72 }, { header: "客户附件", key: "requirements", width: 36 }, { header: "分析关键词", key: "keywords", width: 30 }, { header: "分析要求", key: "analysisRequirements", width: 48 }, { header: "分析模板", key: "templates", width: 36 }, { header: "分析结果", key: "analysisResults", width: 44 }, { header: "参考资料", key: "references", width: 36 }, { header: "生成文件", key: "outputs", width: 36 }];
   project.presalesRounds.forEach((round) => presales.addRow({
     title: round.title,
     meetingAt: round.meetingAt,
     customerNeeds: round.customerNeeds,
     actions: round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"} / ${item.status}\n文件要求：${item.fileRequirements || item.title || "待填写"}`; }).join("\n\n"),
     requirements: round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
+    keywords: round.keywords.join("\n"),
+    analysisRequirements: round.analysisRequirements,
+    templates: round.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
+    analysisResults: round.analysisResults.map((result) => `${result.name} / ${result.fileName} / ${result.relativePath}`).join("\n"),
     references: round.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
     outputs: round.generatedFiles.map((file) => file.name).join("\n"),
   }));

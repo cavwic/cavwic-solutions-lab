@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildCodexPresalesTask, buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, getActionResponseTarget, requestPresalesDraft, safeGeneratedFileName } from "./presales-generation";
+import { analysisResultBaseName, buildCodexPresalesTask, buildCustomerNeedsAnalysisPrompt, buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, getActionResponseTarget, requestPresalesDraft, safeGeneratedFileName, templateFileFormat } from "./presales-generation";
 import { createEmptyProject } from "./workspace-schema";
 
 describe("presales generation", () => {
@@ -53,6 +53,29 @@ describe("presales generation", () => {
     const action = { id: "action-new", title: "", owner: "", dueDate: "", status: "open" as const, responseFileName: "", fileRequirements: "" };
     round.actions = [action];
     expect(getActionResponseTarget(round, action)).toEqual({ name: "", format: "" });
+  });
+
+  it("builds a keyword-weighted customer attachment analysis prompt", () => {
+    const project = createEmptyProject("zh");
+    const round = project.presalesRounds[0];
+    round.keywords = ["技术参数"];
+    round.analysisRequirements = "列出参数、来源位置和待确认项";
+    const source = { id: "source-1", name: "客户需求.md", fileType: "md" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-17", requiresOcr: false, segments: [{ id: "line-1", locatorKind: "line" as const, locator: "行 1", text: "额定负载 5 kg" }] };
+    const template = { ...source, id: "template-1", name: "分析模板.md", segments: [{ ...source.segments[0], id: "template-line", text: "章节：技术要求" }] };
+    const prompt = buildCustomerNeedsAnalysisPrompt(project, round, [source], [template]);
+    expect(prompt).toContain("提高以下关键词");
+    expect(prompt).toContain("技术参数");
+    expect(prompt).toContain("额定负载 5 kg");
+    expect(prompt).toContain("列出参数、来源位置和待确认项");
+    expect(prompt).toContain("章节：技术要求");
+  });
+
+  it("maps template extensions and analysis result names", () => {
+    expect(templateFileFormat("企业模板.docx")).toBe("docx");
+    expect(templateFileFormat("汇报模板.pptx")).toBe("pptx");
+    expect(templateFileFormat("结构.md")).toBe("md");
+    expect(analysisResultBaseName([], "zh")).toBe("整体分析结果");
+    expect(analysisResultBaseName(["技术参数", "时间"], "zh")).toBe("技术参数+时间分析结果");
   });
 
   it("creates a downloadable Markdown file", async () => {

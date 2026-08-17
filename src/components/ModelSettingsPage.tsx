@@ -85,6 +85,8 @@ export default function ModelSettingsPage() {
   const [notice, setNotice] = useState("");
   const t = copy[locale];
   const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+  const requestedReturn = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("return") || "";
+  const returnHref = requestedReturn.startsWith("/") && !requestedReturn.startsWith("//") ? requestedReturn : `${base}/`;
 
   useEffect(() => {
     const storedLocale = localStorage.getItem("cavwic-lab-locale");
@@ -121,6 +123,7 @@ export default function ModelSettingsPage() {
   const save = () => {
     saveModelSettings(settings, apiKey);
     setNotice(t.saved);
+    if (requestedReturn) window.location.href = returnHref;
   };
 
   const reset = () => {
@@ -136,7 +139,7 @@ export default function ModelSettingsPage() {
     <header className="settings-hero">
       <div><p>{t.eyebrow}</p><h1>{t.title}</h1><span>{t.summary}</span></div>
       <div className="settings-page-actions">
-        <a className="command-button" href={`${base}/`}><ArrowLeft size={17}/>{t.back}</a>
+        <a className="command-button" href={returnHref}><ArrowLeft size={17}/>{t.back}</a>
         <button className="icon-command" type="button" aria-label={theme === "light" ? t.switchDark : t.switchLight} title={theme === "light" ? t.switchDark : t.switchLight} onClick={switchTheme}>{theme === "light" ? <Moon size={18}/> : <Sun size={18}/>}</button>
         <button className="command-button language-command" type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button>
       </div>
