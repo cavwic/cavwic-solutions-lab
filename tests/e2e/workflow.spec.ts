@@ -203,12 +203,11 @@ test("returns from model configuration to the pending customer analysis", async 
   const round = page.locator(".presales-round").first();
   await round.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "客户资料.txt", mimeType: "text/plain", buffer: Buffer.from("项目工期为 90 天。") });
   await round.getByLabel("分析结果文件格式").selectOption("md");
-  page.once("dialog", async (dialog) => {
-    expect(dialog.type()).toBe("alert");
-    expect(dialog.message()).toBe("未配置大模型，请前往配置。");
-    await dialog.accept();
-  });
   await round.getByRole("button", { name: "需求分析" }).click();
+  const modelChoice = page.getByRole("alertdialog");
+  await expect(modelChoice.getByRole("heading")).toHaveText("未配置大模型，请前往配置。");
+  await expect(modelChoice.getByRole("button")).toHaveText(["是，前往配置", "否，输出任务"]);
+  await modelChoice.getByRole("button", { name: "是，前往配置" }).click();
   await expect(page).toHaveURL(/\/model-settings\?return=/);
 
   await page.getByRole("button", { name: "保存配置" }).click();
@@ -221,6 +220,43 @@ test("returns from model configuration to the pending customer analysis", async 
   await expect(page).toHaveURL(workbenchUrl);
   await expect(page.getByText("客户资料.txt")).toBeVisible();
   await expect(page.getByLabel("分析结果文件格式")).toHaveValue("md");
+});
+
+test("outputs a customer analysis task when the user declines model configuration", async ({ page }) => {
+  await page.evaluate(() => {
+    const writes: Array<{ name: string; content: string }> = [];
+    class TaskDirectory {
+      name = "分析任务";
+      async queryPermission() { return "granted" as PermissionState; }
+      async requestPermission() { return "granted" as PermissionState; }
+      async getFileHandle(name: string) {
+        return {
+          async createWritable() {
+            return { async write(content: string) { writes.push({ name, content: String(content) }); }, async close() {} };
+          },
+        };
+      }
+    }
+    (window as typeof window & { __analysisTaskWrites?: Array<{ name: string; content: string }> }).__analysisTaskWrites = writes;
+    window.showDirectoryPicker = async () => new TaskDirectory() as never;
+  });
+
+  const workbenchUrl = page.url();
+  const round = page.locator(".presales-round").first();
+  await round.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "客户参数.txt", mimeType: "text/plain", buffer: Buffer.from("设备额定负载为 5 kg。") });
+  await round.getByRole("button", { name: "技术参数", exact: true }).click();
+  await round.getByLabel("分析要求").fill("输出参数、来源位置和待确认项。");
+  await round.getByLabel("分析结果文件格式").selectOption("docx");
+  await round.getByRole("button", { name: "需求分析" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
+
+  await expect(page).toHaveURL(workbenchUrl);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __analysisTaskWrites?: Array<{ name: string; content: string }> }).__analysisTaskWrites || [])).toHaveLength(1);
+  const [task] = await page.evaluate(() => (window as typeof window & { __analysisTaskWrites?: Array<{ name: string; content: string }> }).__analysisTaskWrites || []);
+  expect(task.name).toMatch(/^presales-analysis-.+\.md$/);
+  expect(task.content).toContain("设备额定负载为 5 kg");
+  expect(task.content).toContain("输出参数、来源位置和待确认项");
+  expect(task.content).toContain("analysisResults");
 });
 
 test("analyzes selected customer attachments with keywords and a matching template", async ({ page }) => {
@@ -316,12 +352,10 @@ test("requires a callable model before generating a response file", async ({ pag
   await action.getByLabel("响应文件名称").fill("待生成响应");
   await action.getByLabel("响应文件格式").selectOption("docx");
   await action.locator('input[type="checkbox"]').check();
-  page.once("dialog", async (dialog) => {
-    expect(dialog.type()).toBe("alert");
-    expect(dialog.message()).toBe("未配置大模型，请前往配置。");
-    await dialog.accept();
-  });
   await action.getByRole("button", { name: "生成文件" }).click();
+  const modelChoice = page.getByRole("alertdialog");
+  await expect(modelChoice.getByRole("heading")).toHaveText("未配置大模型，请前往配置。");
+  await modelChoice.getByRole("button", { name: "是，前往配置" }).click();
   await expect(page).toHaveURL(/\/model-settings\?return=/);
 
   await page.getByRole("button", { name: "本机或内网接口" }).click();
@@ -338,7 +372,7 @@ test("requires a callable model before generating a response file", async ({ pag
 });
 
 test("batch-generates separate tasks and files only for checked response items", async ({ page }) => {
-  await page.addInitScript(() => {
+  await page.evaluate(() => {
     const writes: string[] = [];
     class TaskDirectory {
       name = "任务输出";
@@ -357,13 +391,6 @@ test("batch-generates separate tasks and files only for checked response items",
     window.showDirectoryPicker = async () => directory as never;
   });
 
-  await page.getByRole("link", { name: /模型配置/ }).click();
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9001/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("batch-test-model");
-  await page.getByRole("button", { name: "保存配置" }).click();
-  await page.getByRole("link", { name: "返回工作台" }).click();
-
   const round = page.locator(".presales-round").first();
   for (const [index, name] of ["响应文件一", "响应文件二", "响应文件三"].entries()) {
     await round.getByRole("button", { name: "新增执行项" }).click();
@@ -375,12 +402,24 @@ test("batch-generates separate tasks and files only for checked response items",
   await round.getByLabel("选择响应文件 响应文件一").check();
   await round.getByLabel("选择响应文件 响应文件三").check();
 
-  await round.getByRole("button", { name: "批量生成任务" }).click();
+  await expect(round.getByRole("button", { name: "生成任务", exact: true })).toHaveCount(0);
+  await expect(round.getByRole("button", { name: "批量生成任务" })).toHaveCount(0);
+  await round.getByRole("button", { name: "批量生成文件" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __taskWrites?: string[] }).__taskWrites || [])).toHaveLength(2);
   const taskNames = await page.evaluate(() => (window as typeof window & { __taskWrites?: string[] }).__taskWrites || []);
   expect(taskNames.some((name) => name.includes("响应文件一"))).toBe(true);
   expect(taskNames.some((name) => name.includes("响应文件三"))).toBe(true);
   expect(taskNames.some((name) => name.includes("响应文件二"))).toBe(false);
+
+  await page.getByRole("link", { name: /模型配置/ }).click();
+  await page.getByRole("button", { name: "本机或内网接口" }).click();
+  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9001/v1/chat/completions");
+  await page.getByLabel("模型名称").fill("batch-test-model");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await page.getByRole("link", { name: "返回工作台" }).click();
+  await round.getByLabel("选择响应文件 响应文件一").check();
+  await round.getByLabel("选择响应文件 响应文件三").check();
 
   let requestCount = 0;
   await page.route("http://127.0.0.1:9001/v1/chat/completions", async (route) => {
@@ -438,7 +477,8 @@ test("stores sources, Codex tasks, and generated files in the selected project f
   const taskAction = page.locator(".round-action-row").first();
   await taskAction.getByLabel("响应文件名称").fill("项目响应任务");
   await taskAction.getByLabel("响应文件格式").selectOption("md");
-  await taskAction.getByRole("button", { name: "生成任务" }).click();
+  await taskAction.getByRole("button", { name: "生成文件" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
   await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
     .some((path) => /客户项目\/presales-.+\.md$/.test(path))))
     .toBe(true);

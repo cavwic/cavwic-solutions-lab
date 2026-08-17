@@ -162,6 +162,94 @@ export function safeGeneratedFileName(name: string, format: ResponseFileFormat):
   return `${stem}.${format}`;
 }
 
+export function buildCodexCustomerAnalysisTask(
+  project: ProjectManifest,
+  round: PresalesRound,
+  sources: SourceDocument[],
+  templates: SourceDocument[],
+  locale: Locale = project.locale,
+): { name: string; content: string; outputName: string } {
+  if (!round.analysisOutputFormat) throw new Error("ANALYSIS_OUTPUT_FORMAT_REQUIRED");
+  const baseName = analysisResultBaseName(round.keywords, locale);
+  let resultName = baseName;
+  let sequence = 2;
+  while (round.analysisResults.some((result) => result.name === resultName)) {
+    resultName = `${baseName}-${sequence}`;
+    sequence += 1;
+  }
+  const outputName = safeGeneratedFileName(resultName, round.analysisOutputFormat);
+  const taskName = `presales-analysis-${round.id}-${outputName.replace(/\.[^.]+$/, "")}.md`.replace(/[\\/:*?"<>|]+/g, "-");
+  const prompt = buildCustomerNeedsAnalysisPrompt(project, round, sources, templates, locale);
+  const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
+  const outputFolder = (locale === "zh"
+    ? `售前阶段-第${roundIndex + 1}次沟通-分析要求`
+    : `Presales-Communication-${roundIndex + 1}-Analysis`).replace(/[\\/:*?"<>|\s]+/g, "-");
+  const relativePath = `projects/${project.id}/outputs/${outputFolder}/${outputName}`;
+  const sourceLocator = round.analysisOutputFormat === "pptx" ? "slide" : round.analysisOutputFormat === "docx" ? "paragraph" : "line";
+
+  if (locale === "zh") return {
+    name: taskName,
+    outputName,
+    content: [
+      `# Codex 客户附件分析任务：${round.title}`,
+      "",
+      "在当前工作区内执行本任务。不得上传原始资料，不得补造附件中不存在的客户事实。",
+      "",
+      "## 路径",
+      `- 项目：projects/${project.id}`,
+      `- 输入资料：projects/${project.id}/sources`,
+      `- 输出文件：${relativePath}`,
+      `- 项目清单：projects/${project.id}/project.json`,
+      "",
+      "## 执行要求",
+      `1. 根据下方任务正文生成 ${round.analysisOutputFormat.toUpperCase()} 分析文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。`,
+      "2. 只使用任务正文和项目目录中的资料；无法核验的参数、日期、资质、评分规则、价格和承诺标为待确认。",
+      "3. 生成后计算输出文件 SHA-256，并在 project.json 的 sources 中增加对应来源记录。",
+      `4. 在本轮 analysisResults 中增加记录：name 为 ${resultName}，provider 为 codex，model 写实际使用的 Codex 模型，relativePath 为 ${relativePath}。`,
+      `5. 记录当前 prompt、keywords、sourceIds 和 templateSourceIds；来源摘要的 locatorKind 使用 ${sourceLocator}。`,
+      "6. 更新 project.json 的 updatedAt，并用项目现有 Zod 结构或测试校验。不得删除用户已有数据。",
+      "7. 完成后报告输出路径、校验结果、证据缺口和仍需人工确认的事项。",
+      "",
+      "## 任务正文",
+      "```text",
+      prompt,
+      "```",
+      "",
+    ].join("\n"),
+  };
+
+  return {
+    name: taskName,
+    outputName,
+    content: [
+      `# Codex customer attachment analysis task: ${round.title}`,
+      "",
+      "Run this task inside the current workspace. Do not upload source files or invent customer facts absent from the attachments.",
+      "",
+      "## Paths",
+      `- Project: projects/${project.id}`,
+      `- Inputs: projects/${project.id}/sources`,
+      `- Output: ${relativePath}`,
+      `- Manifest: projects/${project.id}/project.json`,
+      "",
+      "## Execution requirements",
+      `1. Generate a ${round.analysisOutputFormat.toUpperCase()} analysis file from the task body below. Use document or presentation tooling for formatting and visual QA when required.`,
+      "2. Use only the task body and project files. Mark unsupported parameters, dates, qualifications, scoring rules, prices, and commitments as To confirm.",
+      "3. Calculate the output SHA-256 and append a matching source record to project.json.",
+      `4. Append an analysisResults record to this round with name ${resultName}, provider codex, the actual Codex model name, and relativePath ${relativePath}.`,
+      `5. Preserve the current prompt, keywords, sourceIds, and templateSourceIds. Use ${sourceLocator} as locatorKind for the output summary.`,
+      "6. Update project.json updatedAt and validate it against the existing Zod schema or tests. Preserve all user-authored data.",
+      "7. Report the output path, validation result, evidence gaps, and every item requiring human review.",
+      "",
+      "## Task body",
+      "```text",
+      prompt,
+      "```",
+      "",
+    ].join("\n"),
+  };
+}
+
 export function buildCodexPresalesTask(project: ProjectManifest, round: PresalesRound, action: PresalesRoundAction, locale: Locale = project.locale): { name: string; content: string; outputName: string } {
   const target = getActionResponseTarget(round, action);
   if (!target.name || !target.format) throw new Error("RESPONSE_FILE_CONFIG_REQUIRED");

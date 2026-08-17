@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { analysisResultBaseName, buildCodexPresalesTask, buildCustomerNeedsAnalysisPrompt, buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, getActionResponseTarget, requestPresalesDraft, safeGeneratedFileName, templateFileFormat } from "./presales-generation";
+import { analysisResultBaseName, buildCodexCustomerAnalysisTask, buildCodexPresalesTask, buildCustomerNeedsAnalysisPrompt, buildPresalesPrompt, createGeneratedFile, DEFAULT_MODEL_SETTINGS, getActionResponseTarget, requestPresalesDraft, safeGeneratedFileName, templateFileFormat } from "./presales-generation";
 import { createEmptyProject } from "./workspace-schema";
 
 describe("presales generation", () => {
@@ -70,6 +70,22 @@ describe("presales generation", () => {
     expect(prompt).toContain("列出参数、来源位置和待确认项");
     expect(prompt).toContain("章节：技术要求");
     expect(prompt).toContain("客户项目经理 (客户)");
+  });
+
+  it("builds a customer analysis task that writes the result back to the project", () => {
+    const project = createEmptyProject("zh");
+    const round = project.presalesRounds[0];
+    round.keywords = ["技术参数"];
+    round.analysisRequirements = "列出参数和来源位置";
+    round.analysisOutputFormat = "docx";
+    const source = { id: "source-1", name: "客户需求.md", fileType: "md" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-18", requiresOcr: false, segments: [{ id: "line-1", locatorKind: "line" as const, locator: "行 1", text: "额定负载 5 kg" }] };
+    const task = buildCodexCustomerAnalysisTask(project, round, [source], []);
+    expect(task.name).toMatch(/^presales-analysis-.+\.md$/);
+    expect(task.outputName).toBe("技术参数分析结果.docx");
+    expect(task.content).toContain("额定负载 5 kg");
+    expect(task.content).toContain("列出参数和来源位置");
+    expect(task.content).toContain("analysisResults");
+    expect(task.content).toContain("provider 为 codex");
   });
 
   it("maps template extensions and analysis result names", () => {

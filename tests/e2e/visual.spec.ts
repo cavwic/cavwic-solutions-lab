@@ -68,9 +68,13 @@ test("presales communication workspace remains readable", async ({ page }, testI
   await expect(page.getByRole("heading", { name: "客户沟通与文件响应" })).toBeVisible();
   await expect(page.getByLabel("响应文件格式")).toBeVisible();
   await expect(page.getByLabel("文件要求")).toBeVisible();
-  await expect(page.getByRole("button", { name: "生成任务", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "生成任务", exact: true })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "生成文件", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "批量生成任务" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "批量生成任务" })).toHaveCount(0);
+  await page.getByRole("button", { name: "生成文件", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("alertdialog").screenshot({ path: testInfo.outputPath("model-action-choice-zh.png") });
+  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
   await expectNoHorizontalOverflow(page);
   await node.screenshot({ path: testInfo.outputPath("communication-participants-zh.png") });
   await round.locator(".round-needs").screenshot({ path: testInfo.outputPath("customer-analysis-config-zh.png") });

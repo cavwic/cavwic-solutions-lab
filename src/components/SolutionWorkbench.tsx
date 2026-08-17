@@ -25,6 +25,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Settings2,
   ShieldCheck,
   Sparkles,
   Sun,
@@ -46,6 +47,7 @@ import {
 } from "../lib/exporters";
 import { parseSourceFile } from "../lib/parsers";
 import {
+  buildCodexCustomerAnalysisTask,
   buildCodexPresalesTask,
   buildCustomerNeedsAnalysisPrompt,
   buildPresalesPrompt,
@@ -114,6 +116,10 @@ import {
 
 type View = WorkspaceView;
 type Props = { initialView?: View };
+type ModelInvocation = { settings: ReturnType<typeof readModelSettings>; apiKey: string };
+type PendingModelAction =
+  | { kind: "customer-analysis"; roundId: string; anchorId: string }
+  | { kind: "response-files"; roundId: string; actionIds: string[]; anchorId: string };
 
 const copy = {
   zh: {
@@ -405,8 +411,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [expandedAnalysisId, setExpandedAnalysisId] = useState("");
   const [participantDrafts, setParticipantDrafts] = useState<Record<string, { name: string; category: PresalesParticipant["category"] }>>({});
   const [returnState, setReturnState] = useState<ModelActionReturnState | null>(null);
+  const [pendingModelAction, setPendingModelAction] = useState<PendingModelAction | null>(null);
   const sourceInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
+  const modelChoicePrimary = useRef<HTMLButtonElement>(null);
   const t = copy[locale];
   const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
@@ -460,6 +468,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }, 50);
     return () => window.clearTimeout(timer);
   }, [ready, returnState, view]);
+
+  useEffect(() => {
+    if (pendingModelAction) modelChoicePrimary.current?.focus();
+  }, [pendingModelAction]);
 
   useEffect(() => {
     if (!ready) return;
@@ -738,11 +750,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   };
 
-  const requireModel = (action: string, anchorId: string) => {
+  const configuredModel = (): ModelInvocation | null => {
     const currentSettings = readModelSettings();
     const currentApiKey = readModelApiKey();
     if (hasBrowserCallableModel(currentSettings)) return { settings: currentSettings, apiKey: currentApiKey };
+    return null;
+  };
 
+  const rememberModelActionAndOpenSettings = (pending: PendingModelAction) => {
     try {
       localStorage.setItem("cavwic-solution-workspace", JSON.stringify({ ...project, updatedAt: new Date().toISOString() }));
     } catch {
@@ -751,10 +766,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const returnPath = `${window.location.pathname}${window.location.search}`;
     saveModelActionReturnState({
       schemaVersion: "1.0.0",
-      action,
+      action: pending.kind,
       returnPath,
       view,
-      anchorId,
+      anchorId: pending.anchorId,
       scrollY: Math.max(0, window.scrollY),
       selectedSourceId,
       selectedRequirementId,
@@ -763,23 +778,19 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       taskKind,
       savedAt: new Date().toISOString(),
     });
-    window.alert(locale === "zh" ? "未配置大模型，请前往配置。" : "No model is configured. Open model configuration.");
+    setPendingModelAction(null);
     window.location.href = `${base}/model-settings?return=${encodeURIComponent(returnPath)}`;
-    return null;
   };
 
-  const analyzeCustomerSources = async (round: PresalesRound) => {
-    if (!round.requirementSourceIds.length) return;
-    const invocation = requireModel("customer-requirement-analysis", `communication-${round.id}`);
-    if (!invocation) return;
+  const customerAnalysisInputs = (round: PresalesRound) => {
     const sourceIds = selectedCustomerSourceIds(round);
     if (!sourceIds.length) {
       window.alert(locale === "zh" ? "请先选择需要分析的客户附件。" : "Select at least one customer attachment to analyze.");
-      return;
+      return null;
     }
     if (!round.analysisOutputFormat) {
       window.alert(locale === "zh" ? "请先选择分析结果的文件格式。" : "Select an output format for the analysis result.");
-      return;
+      return null;
     }
     const selectedTemplates = round.selectedTemplateSourceIds
       .map((id) => project.sources.find((source) => source.id === id))
@@ -787,11 +798,18 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const mismatch = selectedTemplates.find((source) => templateFileFormat(source.name) !== round.analysisOutputFormat);
     if (mismatch) {
       alertTemplateMismatch(mismatch.name, round.analysisOutputFormat);
-      return;
+      return null;
     }
     const selectedSources = sourceIds
       .map((id) => project.sources.find((source) => source.id === id))
       .filter((source): source is NonNullable<typeof source> => Boolean(source));
+    return { sourceIds, selectedSources, selectedTemplates, outputFormat: round.analysisOutputFormat };
+  };
+
+  const analyzeCustomerSources = async (round: PresalesRound, invocation: ModelInvocation) => {
+    const inputs = customerAnalysisInputs(round);
+    if (!inputs) return;
+    const { sourceIds, selectedSources, selectedTemplates, outputFormat } = inputs;
     setAnalyzingRoundId(round.id);
     setBusy(true);
     try {
@@ -799,7 +817,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
       const baseName = analysisResultBaseName(round.keywords, locale);
       const resultName = uniqueAnalysisResultName(baseName, round.analysisResults);
-      const generated = await createGeneratedFile(draft.content, resultName, round.analysisOutputFormat);
+      const generated = await createGeneratedFile(draft.content, resultName, outputFormat);
       const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
       const source = await parseSourceFile(generatedFile);
       const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
@@ -813,7 +831,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         id: createId("analysis"),
         name: resultName,
         fileName: generated.name,
-        format: round.analysisOutputFormat,
+        format: outputFormat,
         createdAt: new Date().toISOString(),
         provider: draft.provider,
         model: draft.model,
@@ -884,10 +902,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   };
 
-  const generatePresalesFiles = async (round: PresalesRound, actions: PresalesRoundAction[]) => {
-    const anchorId = actions.length === 1 ? `response-action-${actions[0].id}` : `communication-${round.id}`;
-    const invocation = requireModel(actions.length === 1 ? "generate-response-file" : "batch-generate-response-files", anchorId);
-    if (!invocation) return;
+  const generatePresalesFiles = async (round: PresalesRound, actions: PresalesRoundAction[], invocation: ModelInvocation) => {
     if (!validateResponseActions(round, actions)) return;
     if (!window.confirm(locale === "zh" ? "是否使用模型生成该文件？" : "Use the configured model to generate this file?")) return;
 
@@ -944,6 +959,65 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       setBusy(false);
       setGeneratingActionId("");
     }
+  };
+
+  const generateCustomerAnalysisTask = async (round: PresalesRound) => {
+    const inputs = customerAnalysisInputs(round);
+    if (!inputs) return;
+    setGeneratingActionId(`task-analysis-${round.id}`);
+    setBusy(true);
+    try {
+      const task = buildCodexCustomerAnalysisTask(project, round, inputs.selectedSources, inputs.selectedTemplates, locale);
+      if (supportsDirectoryAccess()) {
+        const outputDirectory = await chooseTaskOutputDirectory(directoryHandle);
+        await saveTaskFileToDirectory(outputDirectory, task.name, task.content);
+        setNotice(locale === "zh" ? `大模型任务已保存到“${outputDirectory.name}”。` : `Model task saved to “${outputDirectory.name}”.`);
+      } else {
+        downloadText(task.name, task.content, "text/markdown;charset=utf-8");
+        setNotice(locale === "zh" ? "大模型任务已下载。" : "Model task downloaded.");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") setNotice(locale === "zh" ? "已取消保存任务。" : "Task saving cancelled.");
+      else setNotice(locale === "zh" ? "任务文件保存失败，请重新选择可写目录。" : "The task could not be saved. Select a writable folder and try again.");
+    } finally {
+      setBusy(false);
+      setGeneratingActionId("");
+    }
+  };
+
+  const startCustomerAnalysis = (round: PresalesRound) => {
+    const invocation = configuredModel();
+    if (invocation) {
+      void analyzeCustomerSources(round, invocation);
+      return;
+    }
+    setPendingModelAction({ kind: "customer-analysis", roundId: round.id, anchorId: `communication-${round.id}` });
+  };
+
+  const startPresalesFiles = (round: PresalesRound, actions: PresalesRoundAction[]) => {
+    const invocation = configuredModel();
+    if (invocation) {
+      void generatePresalesFiles(round, actions, invocation);
+      return;
+    }
+    const anchorId = actions.length === 1 ? `response-action-${actions[0].id}` : `communication-${round.id}`;
+    setPendingModelAction({ kind: "response-files", roundId: round.id, actionIds: actions.map((action) => action.id), anchorId });
+  };
+
+  const outputPendingModelTask = () => {
+    const pending = pendingModelAction;
+    setPendingModelAction(null);
+    if (!pending) return;
+    const round = project.presalesRounds.find((item) => item.id === pending.roundId);
+    if (!round) return;
+    if (pending.kind === "customer-analysis") {
+      void generateCustomerAnalysisTask(round);
+      return;
+    }
+    const actions = pending.actionIds
+      .map((id) => round.actions.find((action) => action.id === id))
+      .filter((action): action is PresalesRoundAction => Boolean(action));
+    void generatePresalesTasks(round, actions);
   };
 
   const openGeneratedFile = async (record: PresalesGeneratedFile) => {
@@ -1137,7 +1211,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
                 {templateSources.length > 0 && <div className="template-source-list">{templateSources.map((source) => source && <div className={round.selectedTemplateSourceIds.includes(source.id) ? "selected" : ""} key={source.id}><button type="button" aria-pressed={round.selectedTemplateSourceIds.includes(source.id)} onClick={() => toggleAnalysisTemplate(round, source.id)}><FileText size={15}/><span>{source.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除模板 ${source.name}` : `Delete template ${source.name}`} title={locale === "zh" ? "删除模板" : "Delete template"} onClick={() => void removePresalesSource(round, source.id, "templates")}><X size={14}/></button></div>)}</div>}
                 <Field label={locale === "zh" ? "文件格式" : "Output format"}><select aria-label={locale === "zh" ? "分析结果文件格式" : "Analysis result output format"} value={round.analysisOutputFormat || ""} onChange={(event) => setAnalysisOutputFormat(round, event.target.value as ResponseFileFormat | "")}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field>
               </div>
-              <button className="generate-command analysis-command" type="button" disabled={busy || !round.requirementSourceIds.length} onClick={() => void analyzeCustomerSources(round)}><Sparkles size={17}/>{analyzingRoundId === round.id ? (locale === "zh" ? "正在分析" : "Analyzing") : (locale === "zh" ? "需求分析" : "Analyze requirements")}</button>
+              <button className="generate-command analysis-command" type="button" disabled={busy || !round.requirementSourceIds.length} onClick={() => startCustomerAnalysis(round)}><Sparkles size={17}/>{analyzingRoundId === round.id ? (locale === "zh" ? "正在分析" : "Analyzing") : (locale === "zh" ? "需求分析" : "Analyze requirements")}</button>
               {round.analysisResults.length > 0 && <div className="analysis-result-list"><strong>{locale === "zh" ? "分析结果" : "Analysis results"}</strong>{round.analysisResults.map((result) => <article className={expandedAnalysisId === result.id ? "expanded" : ""} key={result.id}>
                 <div><button type="button" onClick={() => { updatePresalesRound(round.id, { analysisRequirements: result.prompt }); setExpandedAnalysisId(expandedAnalysisId === result.id ? "" : result.id); }}><FileCheck2 size={16}/><span>{result.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除分析结果 ${result.name}` : `Delete analysis result ${result.name}`} title={locale === "zh" ? "删除分析结果" : "Delete analysis result"} onClick={() => void removeAnalysisResult(round, result)}><X size={14}/></button></div>
                 {expandedAnalysisId === result.id && <button className="open-analysis-file" type="button" onClick={() => void openAnalysisResult(result)}><ExternalLink size={15}/>{locale === "zh" ? `打开文件 · ${result.fileName}` : `Open file · ${result.fileName}`}</button>}
@@ -1166,16 +1240,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
                   <Field label={locale === "zh" ? "文件要求" : "File requirements"}><textarea rows={5} aria-label={locale === "zh" ? "文件要求" : "File requirements"} placeholder={locale === "zh" ? "说明文件格式、内容、参考模板、需继承的信息及不得承诺的事项" : "Describe formatting, content, reference templates, inherited information, and prohibited commitments"} value={action.fileRequirements || ""} onChange={(event) => updateRoundAction(round, action.id, { fileRequirements: event.target.value })}/></Field>
                   <div className="action-command-row">
                     <label className="action-select" title={locale === "zh" ? "选择该项" : "Select this item"}><input type="checkbox" aria-label={locale === "zh" ? `选择响应文件 ${target.name || "未命名"}` : `Select response file ${target.name || "unnamed"}`} checked={selectedActionIds.has(action.id)} onChange={(event) => setActionSelected(action.id, event.target.checked)}/><span><Check size={16}/></span></label>
-                    <button className="generate-command" type="button" disabled={busy} onClick={() => void generatePresalesTasks(round, [action])}><FileText size={17}/>{generatingActionId === `task-${action.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "生成任务" : "Generate task")}</button>
-                    <button className="generate-command" type="button" disabled={busy} onClick={() => void generatePresalesFiles(round, [action])}><Sparkles size={17}/>{generatingActionId === `file-${action.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "生成文件" : "Generate file")}</button>
+                    <button className="generate-command" type="button" disabled={busy} onClick={() => startPresalesFiles(round, [action])}><Sparkles size={17}/>{generatingActionId === `file-${action.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "生成文件" : "Generate file")}</button>
                   </div>
                 </div>;
               })}</div>
               <button className="inline-command" type="button" onClick={() => addRoundAction(round)}><Plus size={15}/>{locale === "zh" ? "新增执行项" : "Add action"}</button>
               <div className="bulk-action-row">
                 <label className="action-select" title={locale === "zh" ? "选择本轮全部执行项" : "Select all actions in this round"}><input type="checkbox" aria-label={locale === "zh" ? "选择本轮全部执行项" : "Select all actions in this round"} disabled={!round.actions.length} checked={round.actions.length > 0 && round.actions.every((action) => selectedActionIds.has(action.id))} onChange={(event) => setRoundActionsSelected(round, event.target.checked)}/><span><Check size={16}/></span></label>
-                <button className="generate-command" type="button" disabled={busy || !checkedActions(round).length} onClick={() => void generatePresalesTasks(round, checkedActions(round))}><FileText size={17}/>{generatingActionId === `batch-task-${round.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "批量生成任务" : "Generate tasks")}</button>
-                <button className="generate-command" type="button" disabled={busy || !checkedActions(round).length} onClick={() => void generatePresalesFiles(round, checkedActions(round))}><Sparkles size={17}/>{generatingActionId === `batch-file-${round.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "批量生成文件" : "Generate files")}</button>
+                <button className="generate-command" type="button" disabled={busy || !checkedActions(round).length} onClick={() => startPresalesFiles(round, checkedActions(round))}><Sparkles size={17}/>{generatingActionId === `batch-file-${round.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "批量生成文件" : "Generate files")}</button>
               </div>
             </div>
             <div className="round-outputs">
@@ -1251,5 +1323,16 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status" data-stage={currentStage}><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][currentStage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
       <main className="workspace-content">{content}</main>
     </div>
+    {pendingModelAction && <div className="model-choice-backdrop">
+      <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="model-choice-title">
+        <p>MODEL ACTION / EXECUTION PATH</p>
+        <h2 id="model-choice-title">{locale === "zh" ? "未配置大模型，请前往配置。" : "No model is configured. Open model configuration."}</h2>
+        <span>{locale === "zh" ? "可以前往配置可直接调用的模型，也可以输出当前操作对应的大模型任务文件。" : "Configure a directly callable model, or output a model task file for the current action."}</span>
+        <div>
+          <button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => rememberModelActionAndOpenSettings(pendingModelAction)}><Settings2 size={18}/>{locale === "zh" ? "是，前往配置" : "Yes, configure model"}</button>
+          <button type="button" onClick={outputPendingModelTask}><FileText size={18}/>{locale === "zh" ? "否，输出任务" : "No, output task"}</button>
+        </div>
+      </section>
+    </div>}
   </div>;
 }
