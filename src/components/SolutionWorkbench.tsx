@@ -54,14 +54,19 @@ import {
   getActionResponseTarget,
   requestPresalesDraft,
   templateFileFormat,
-  type ModelSettings,
   type ResponseFileFormat,
 } from "../lib/presales-generation";
 import {
-  MODEL_SETTINGS_CHANGED_EVENT,
   readModelApiKey,
   readModelSettings,
 } from "../lib/model-settings";
+import {
+  consumeModelActionReturnState,
+  hasBrowserCallableModel,
+  saveModelActionReturnState,
+  type ModelActionReturnState,
+  type WorkspaceView,
+} from "../lib/model-action";
 import {
   chooseWorkspaceDirectory,
   chooseTaskOutputDirectory,
@@ -107,7 +112,7 @@ import {
   type SourceSegment,
 } from "../lib/workspace-schema";
 
-type View = "presales" | "requirements" | "bid" | "handover" | "outputs";
+type View = WorkspaceView;
 type Props = { initialView?: View };
 
 const copy = {
@@ -393,14 +398,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [taskKind, setTaskKind] = useState<"workflow" | "extract" | "bid">("workflow");
   const [sourceFiles, setSourceFiles] = useState<Map<string, File>>(new Map());
   const [generatedBlobs, setGeneratedBlobs] = useState<Map<string, Blob>>(new Map());
-  const [modelSettings, setModelSettings] = useState<ModelSettings>(() => readModelSettings());
-  const [apiKey, setApiKey] = useState("");
   const [generatingActionId, setGeneratingActionId] = useState("");
   const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(new Set());
   const [keywordDrafts, setKeywordDrafts] = useState<Record<string, string>>({});
   const [analyzingRoundId, setAnalyzingRoundId] = useState("");
   const [expandedAnalysisId, setExpandedAnalysisId] = useState("");
   const [participantDrafts, setParticipantDrafts] = useState<Record<string, { name: string; category: PresalesParticipant["category"] }>>({});
+  const [returnState, setReturnState] = useState<ModelActionReturnState | null>(null);
   const sourceInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
   const t = copy[locale];
@@ -424,13 +428,22 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     document.documentElement.dataset.locale = nextLocale;
     document.documentElement.lang = nextLocale === "zh" ? "zh-CN" : "en";
     document.documentElement.dataset.theme = nextTheme;
-    setModelSettings(readModelSettings());
-    setApiKey(readModelApiKey());
     const stored = localStorage.getItem("cavwic-solution-workspace");
     if (stored) {
       const parsed = projectManifestSchema.safeParse(JSON.parse(stored));
       if (parsed.success) setProject(syncProjectStage(localizeBuiltInProject(parsed.data, nextLocale)));
     } else setProject(syncProjectStage(createEmptyProject(nextLocale)));
+    const currentPath = `${window.location.pathname}${window.location.search}`;
+    const pendingReturn = consumeModelActionReturnState(currentPath);
+    if (pendingReturn) {
+      setView(pendingReturn.view);
+      setSelectedSourceId(pendingReturn.selectedSourceId);
+      setSelectedRequirementId(pendingReturn.selectedRequirementId);
+      setSelectedActionIds(new Set(pendingReturn.selectedActionIds));
+      setExpandedAnalysisId(pendingReturn.expandedAnalysisId);
+      setTaskKind(pendingReturn.taskKind);
+      setReturnState(pendingReturn);
+    }
     void restoreWorkspaceDirectory().then((handle) => {
       if (handle) setDirectoryHandle(handle);
     }).catch(() => undefined);
@@ -438,13 +451,15 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   }, []);
 
   useEffect(() => {
-    const syncModelSettings = () => {
-      setModelSettings(readModelSettings());
-      setApiKey(readModelApiKey());
-    };
-    window.addEventListener(MODEL_SETTINGS_CHANGED_EVENT, syncModelSettings);
-    return () => window.removeEventListener(MODEL_SETTINGS_CHANGED_EVENT, syncModelSettings);
-  }, []);
+    if (!ready || !returnState) return;
+    const timer = window.setTimeout(() => {
+      const anchor = returnState.anchorId ? document.getElementById(returnState.anchorId) : null;
+      if (anchor) anchor.scrollIntoView({ block: "center" });
+      else window.scrollTo({ top: returnState.scrollY });
+      setReturnState(null);
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [ready, returnState, view]);
 
   useEffect(() => {
     if (!ready) return;
@@ -723,12 +738,40 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   };
 
-  const hasCallableModel = modelSettings.provider !== "codex"
-    && Boolean((modelSettings.provider === "local" ? modelSettings.localEndpoint : modelSettings.cloudEndpoint).trim())
-    && Boolean((modelSettings.provider === "local" ? modelSettings.localModel : modelSettings.cloudModel).trim());
+  const requireModel = (action: string, anchorId: string) => {
+    const currentSettings = readModelSettings();
+    const currentApiKey = readModelApiKey();
+    if (hasBrowserCallableModel(currentSettings)) return { settings: currentSettings, apiKey: currentApiKey };
+
+    try {
+      localStorage.setItem("cavwic-solution-workspace", JSON.stringify({ ...project, updatedAt: new Date().toISOString() }));
+    } catch {
+      // The authorized project directory remains the source of truth when browser storage is full.
+    }
+    const returnPath = `${window.location.pathname}${window.location.search}`;
+    saveModelActionReturnState({
+      schemaVersion: "1.0.0",
+      action,
+      returnPath,
+      view,
+      anchorId,
+      scrollY: Math.max(0, window.scrollY),
+      selectedSourceId,
+      selectedRequirementId,
+      selectedActionIds: [...selectedActionIds],
+      expandedAnalysisId,
+      taskKind,
+      savedAt: new Date().toISOString(),
+    });
+    window.alert(locale === "zh" ? "未配置大模型，请前往配置。" : "No model is configured. Open model configuration.");
+    window.location.href = `${base}/model-settings?return=${encodeURIComponent(returnPath)}`;
+    return null;
+  };
 
   const analyzeCustomerSources = async (round: PresalesRound) => {
     if (!round.requirementSourceIds.length) return;
+    const invocation = requireModel("customer-requirement-analysis", `communication-${round.id}`);
+    if (!invocation) return;
     const sourceIds = selectedCustomerSourceIds(round);
     if (!sourceIds.length) {
       window.alert(locale === "zh" ? "请先选择需要分析的客户附件。" : "Select at least one customer attachment to analyze.");
@@ -746,13 +789,6 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       alertTemplateMismatch(mismatch.name, round.analysisOutputFormat);
       return;
     }
-    if (!hasCallableModel) {
-      localStorage.setItem("cavwic-solution-workspace", JSON.stringify({ ...project, updatedAt: new Date().toISOString() }));
-      const returnPath = `${base}/`;
-      window.location.href = `${base}/model-settings?return=${encodeURIComponent(returnPath)}`;
-      return;
-    }
-
     const selectedSources = sourceIds
       .map((id) => project.sources.find((source) => source.id === id))
       .filter((source): source is NonNullable<typeof source> => Boolean(source));
@@ -760,7 +796,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     try {
       const prompt = buildCustomerNeedsAnalysisPrompt(project, round, selectedSources, selectedTemplates, locale);
-      const draft = await requestPresalesDraft(modelSettings, apiKey, prompt);
+      const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
       const baseName = analysisResultBaseName(round.keywords, locale);
       const resultName = uniqueAnalysisResultName(baseName, round.analysisResults);
       const generated = await createGeneratedFile(draft.content, resultName, round.analysisOutputFormat);
@@ -849,11 +885,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const generatePresalesFiles = async (round: PresalesRound, actions: PresalesRoundAction[]) => {
+    const anchorId = actions.length === 1 ? `response-action-${actions[0].id}` : `communication-${round.id}`;
+    const invocation = requireModel(actions.length === 1 ? "generate-response-file" : "batch-generate-response-files", anchorId);
+    if (!invocation) return;
     if (!validateResponseActions(round, actions)) return;
-    if (!hasCallableModel) {
-      window.alert(locale === "zh" ? "请先配置模型。" : "Configure a model first.");
-      return;
-    }
     if (!window.confirm(locale === "zh" ? "是否使用模型生成该文件？" : "Use the configured model to generate this file?")) return;
 
     setGeneratingActionId(actions.length === 1 ? `file-${actions[0].id}` : `batch-file-${round.id}`);
@@ -869,7 +904,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         const target = getActionResponseTarget(currentRound, action);
         if (!target.name || !target.format) throw new Error("RESPONSE_FILE_CONFIG_REQUIRED");
         const prompt = buildPresalesPrompt(nextProject, currentRound, locale, action);
-        const draft = await requestPresalesDraft(modelSettings, apiKey, prompt);
+        const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
         const generated = await createGeneratedFile(draft.content, target.name, target.format);
         const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
         const source = await parseSourceFile(generatedFile);
@@ -1064,7 +1099,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           const selectedCustomerIds = selectedCustomerSourceIds(round);
           const templateSources = round.templateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
           const participantDraft = participantDrafts[round.id] || { name: "", category: "customer" as const };
-          return <article className="presales-round" key={round.id}>
+          return <article className="presales-round" id={`communication-${round.id}`} key={round.id}>
             <div className="round-node">
               <span className="round-cell-label">{locale === "zh" ? "沟通节点" : "Communication"}</span>
               <input aria-label={locale === "zh" ? "沟通节点名称" : "Communication name"} value={round.title} onChange={(event) => updatePresalesRound(round.id, { title: event.target.value })}/>
@@ -1117,7 +1152,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
               </div>
               <div className="round-action-list">{round.actions.map((action) => {
                 const target = getActionResponseTarget(round, action);
-                return <div className="round-action-row" key={action.id}>
+                return <div className="round-action-row" id={`response-action-${action.id}`} key={action.id}>
                   <div className="action-response-fields">
                     <Field label={locale === "zh" ? "响应文件名称" : "Response file name"}><input aria-label={locale === "zh" ? "响应文件名称" : "Response file name"} value={target.name} onChange={(event) => updateRoundAction(round, action.id, { responseFileName: event.target.value })}/></Field>
                     <Field label={locale === "zh" ? "响应文件格式" : "Response file format"}><select aria-label={locale === "zh" ? "响应文件格式" : "Response file format"} value={target.format} onChange={(event) => updateRoundAction(round, action.id, { responseFileFormat: event.target.value ? event.target.value as NonNullable<PresalesRoundAction["responseFileFormat"]> : undefined })}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field>

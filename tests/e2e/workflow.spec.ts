@@ -4,6 +4,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {
     localStorage.clear();
+    sessionStorage.clear();
     localStorage.setItem("cavwic-lab-locale", "zh");
   });
   await page.reload();
@@ -198,17 +199,26 @@ test("keeps only the final project actions in the workspace toolbar", async ({ p
 });
 
 test("returns from model configuration to the pending customer analysis", async ({ page }) => {
+  const workbenchUrl = page.url();
   const round = page.locator(".presales-round").first();
   await round.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "客户资料.txt", mimeType: "text/plain", buffer: Buffer.from("项目工期为 90 天。") });
   await round.getByLabel("分析结果文件格式").selectOption("md");
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("alert");
+    expect(dialog.message()).toBe("未配置大模型，请前往配置。");
+    await dialog.accept();
+  });
   await round.getByRole("button", { name: "需求分析" }).click();
   await expect(page).toHaveURL(/\/model-settings\?return=/);
 
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(page).toHaveURL(/\/model-settings\?return=/);
+  await expect(page.getByText(/当前执行方式不能由网页直接调用/)).toBeVisible();
   await page.getByRole("button", { name: "本机或内网接口" }).click();
   await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9010/v1/chat/completions");
   await page.getByLabel("模型名称").fill("analysis-model");
   await page.getByRole("button", { name: "保存配置" }).click();
-  await expect(page).toHaveURL(/\/cavwic-solutions-lab\/$/);
+  await expect(page).toHaveURL(workbenchUrl);
   await expect(page.getByText("客户资料.txt")).toBeVisible();
   await expect(page.getByLabel("分析结果文件格式")).toHaveValue("md");
 });
@@ -300,16 +310,31 @@ test("analyzes selected customer attachments with keywords and a matching templa
 });
 
 test("requires a callable model before generating a response file", async ({ page }) => {
+  const workbenchUrl = page.url();
   await page.getByRole("button", { name: "新增执行项" }).click();
-  const action = page.locator(".round-action-row").first();
+  let action = page.locator(".round-action-row").first();
   await action.getByLabel("响应文件名称").fill("待生成响应");
   await action.getByLabel("响应文件格式").selectOption("docx");
+  await action.locator('input[type="checkbox"]').check();
   page.once("dialog", async (dialog) => {
     expect(dialog.type()).toBe("alert");
-    expect(dialog.message()).toBe("请先配置模型。");
+    expect(dialog.message()).toBe("未配置大模型，请前往配置。");
     await dialog.accept();
   });
   await action.getByRole("button", { name: "生成文件" }).click();
+  await expect(page).toHaveURL(/\/model-settings\?return=/);
+
+  await page.getByRole("button", { name: "本机或内网接口" }).click();
+  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9012/v1/chat/completions");
+  await page.getByLabel("模型名称").fill("response-model");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(page).toHaveURL(workbenchUrl);
+
+  action = page.locator(".round-action-row").first();
+  await expect(action.getByLabel("响应文件名称")).toHaveValue("待生成响应");
+  await expect(action.getByLabel("响应文件格式")).toHaveValue("docx");
+  await expect(action.locator('input[type="checkbox"]')).toBeChecked();
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem("cavwic-lab-model-action-return"))).toBeNull();
 });
 
 test("batch-generates separate tasks and files only for checked response items", async ({ page }) => {

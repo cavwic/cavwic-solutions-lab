@@ -8,6 +8,7 @@ import {
   type ModelProvider,
   type ModelSettings,
 } from "../lib/model-settings";
+import { hasBrowserCallableModel, readModelActionReturnState } from "../lib/model-action";
 import type { Locale } from "../lib/workspace-schema";
 
 const copy = {
@@ -19,6 +20,7 @@ const copy = {
     current: "当前执行方式",
     saved: "配置已保存。",
     reset: "已恢复 Codex 工作流。",
+    directRequired: "当前执行方式不能由网页直接调用。请选择本机或内网接口，或云模型 / API，并填写接口地址和模型名称。",
     save: "保存配置",
     resetAction: "恢复默认",
     codex: "Codex 工作流",
@@ -49,6 +51,7 @@ const copy = {
     current: "Current execution method",
     saved: "Configuration saved.",
     reset: "Codex workflow restored.",
+    directRequired: "This execution method cannot be called directly by the site. Choose a local, intranet, or cloud API and enter both the endpoint and model name.",
     save: "Save configuration",
     resetAction: "Restore default",
     codex: "Codex workflow",
@@ -121,6 +124,11 @@ export default function ModelSettingsPage() {
   };
 
   const save = () => {
+    const pendingAction = readModelActionReturnState();
+    if (requestedReturn && pendingAction?.returnPath === returnHref && !hasBrowserCallableModel(settings)) {
+      setNotice(t.directRequired);
+      return;
+    }
     saveModelSettings(settings, apiKey);
     setNotice(t.saved);
     if (requestedReturn) window.location.href = returnHref;
