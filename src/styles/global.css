@@ -549,7 +549,7 @@ textarea { padding: 11px; resize: vertical; }
   .header-metrics div:nth-child(-n+2) { border-bottom: 1px solid var(--line); }
   .workspace-toolbar button span { display: none; }
   .workspace-shell { display: block; margin-top: 20px; }
-  .stage-rail { position: static; display: grid; grid-template-columns: repeat(5, 1fr); margin-bottom: 30px; overflow-x: auto; border: 1px solid var(--line); }
+  .stage-rail { position: static; display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 30px; overflow-x: auto; border: 1px solid var(--line); }
   .stage-rail > button { min-width: 66px; min-height: 64px; grid-template-columns: 1fr; justify-items: center; gap: 3px; border-right: 1px solid var(--line); border-bottom: 0; text-align: center; }
   .stage-rail > button > span, .stage-rail > button > svg:last-child, .stage-rail > button strong { display: none; }
   .stage-rail > button.active { padding-left: 6px; border-left: 0; border-bottom: 3px solid var(--signal); }

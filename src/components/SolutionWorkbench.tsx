@@ -4,7 +4,6 @@ import {
   BriefcaseBusiness,
   Check,
   ChevronRight,
-  ClipboardCheck,
   Copy,
   Download,
   ExternalLink,
@@ -301,8 +300,6 @@ const viewMeta: Array<{ id: View; icon: typeof BriefcaseBusiness; code: string }
   { id: "presales", icon: BriefcaseBusiness, code: "01" },
   { id: "requirements", icon: FileSearch, code: "02" },
   { id: "bid", icon: PackageCheck, code: "03" },
-  { id: "handover", icon: ClipboardCheck, code: "04" },
-  { id: "outputs", icon: FileOutput, code: "05" },
 ];
 
 const responseLabels = {

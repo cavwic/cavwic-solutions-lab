@@ -11,7 +11,7 @@ test.beforeEach(async ({ page }) => {
   await expect(page.locator(".solution-app")).toHaveAttribute("data-ready", "true");
 });
 
-test("runs the presales-to-handover project flow and persists edits", async ({ page }) => {
+test("runs the public presales-to-bid project flow and persists edits", async ({ page }) => {
   const projectName = page.locator(".field-grid input").first();
   await expect(projectName).toHaveValue("新建解决方案项目");
   await projectName.fill("端到端解决方案项目");
@@ -26,26 +26,12 @@ test("runs the presales-to-handover project flow and persists edits", async ({ p
   await expect(page.getByRole("heading", { name: /投标文件输出|Bid file output/ })).toBeVisible();
   await expect(page.locator(".bid-output-list > article")).toHaveCount(0);
 
-  await page.getByRole("button", { name: /中标交底|Award handover/ }).click();
-  await expect(page.getByText(/技术交底与项目协同|Technical handover and project actions/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /中标交底|Award handover/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /输出与 Skills|Outputs and Skills/ })).toHaveCount(0);
 
   await page.reload();
   await page.getByRole("button", { name: /售前准备|Presales/ }).click();
   await expect(page.locator(".field-grid input").first()).toHaveValue("端到端解决方案项目");
-});
-
-test("exports project files and exposes versioned Skill downloads", async ({ page }) => {
-  await page.getByRole("button", { name: /输出与 Skills|Outputs and Skills/ }).click();
-  await expect(page.locator(".format-grid button")).toHaveCount(6);
-  await expect(page.locator(".skill-downloads a")).toHaveCount(3);
-
-  const csvDownload = page.waitForEvent("download");
-  await page.locator(".format-grid button").filter({ hasText: "CSV" }).click();
-  expect((await csvDownload).suggestedFilename()).toContain("requirements.csv");
-
-  const zipDownload = page.waitForEvent("download");
-  await page.getByRole("button", { name: /导出完整 ZIP|Export complete ZIP/ }).click();
-  expect((await zipDownload).suggestedFilename()).toContain("package.zip");
 });
 
 test("legacy scoring routes point users to the new workflow", async ({ page }) => {
@@ -81,11 +67,7 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
   await expect(stage).toHaveAttribute("data-stage", "tender");
   await expect(stage.locator("strong")).toHaveText("投标");
 
-  await page.getByRole("button", { name: "中标交底" }).click();
-  await expect(stage).toHaveAttribute("data-stage", "tender");
-  await page.locator("section:has(.handover-grid) .icon-command").click();
-  await expect(stage).toHaveAttribute("data-stage", "delivery");
-  await expect(stage.locator("strong")).toHaveText("交底");
+  await expect(page.getByRole("button", { name: "中标交底" })).toHaveCount(0);
 });
 
 test("preprocesses selected tender files and keeps unrecognized files without OCR", async ({ page }) => {
@@ -363,11 +345,11 @@ test("manages presales communication rounds and generates a referenced file", as
   await expect(page.locator(".presales-round")).toHaveCount(1);
 });
 
-test("uses one global model link in the header and keeps lifecycle navigation in the workbench", async ({ page }) => {
+test("uses one global model link and shows only the three published stages", async ({ page }) => {
   const navigation = page.locator(".lab-header nav");
   await expect(navigation.locator("a")).toHaveCount(1);
   await expect(navigation.getByRole("link", { name: /模型配置/ })).toHaveAttribute("href", /\/model-settings$/);
-  await expect(page.locator(".stage-rail > button")).toHaveCount(5);
+  await expect(page.locator(".stage-rail > button")).toHaveCount(3);
 
   await navigation.getByRole("link", { name: /模型配置/ }).click();
   await expect(page).toHaveURL(/\/model-settings$/);
@@ -675,9 +657,4 @@ test("stores sources, Codex tasks, and generated files in the selected project f
     .some((path) => /客户项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/sources\/tender\.txt$/.test(path))))
     .toBe(true);
 
-  await page.getByRole("button", { name: "输出与 Skills" }).click();
-  await page.locator(".format-grid button").filter({ hasText: "Markdown" }).click();
-  await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
-    .some((path) => /客户项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/outputs\/[^/]+\.md$/.test(path))))
-    .toBe(true);
 });
