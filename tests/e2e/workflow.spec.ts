@@ -137,11 +137,25 @@ test("manages presales communication rounds and generates a referenced file", as
   await expect(firstAction.getByLabel("响应文件格式")).toHaveValue("");
   await expect(firstAction.getByLabel("执行项", { exact: true })).toHaveCount(0);
   await firstAction.getByLabel("项目责任人", { exact: true }).fill("解决方案负责人");
-  await firstAction.getByLabel("时间", { exact: true }).fill("2026-09-01");
+  await firstAction.getByLabel("截止时间", { exact: true }).fill("2026-09-01");
   await firstRound.locator(".reference-checks input").first().check();
   await firstAction.getByLabel("文件要求").fill("输出需求、建议响应、边界和后续行动。");
   await firstAction.getByLabel("响应文件名称").fill("第一轮响应");
   await expect(firstAction.getByLabel("响应文件格式").locator("option")).toHaveText(["请选择", "Word", "PPT", "Markdown"]);
+  await firstAction.locator("label.file-command", { hasText: "上传模板" }).locator("input[type=file]").setInputFiles([
+    { name: "响应模板.md", mimeType: "text/markdown", buffer: Buffer.from("# 模板章节\n\n现状、方案、边界") },
+    { name: "删除模板.md", mimeType: "text/markdown", buffer: Buffer.from("不应进入模型提示词") },
+  ]);
+  await expect(firstAction.locator(".template-source-list > div")).toHaveCount(2);
+  await firstAction.locator(".template-source-list > div").first().locator("button").first().click();
+  await firstAction.getByRole("button", { name: "删除响应文件模板 删除模板.md" }).click();
+  await expect(firstAction.locator(".template-source-list > div")).toHaveCount(1);
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("输出格式不匹配");
+    await dialog.accept();
+  });
+  await firstAction.getByLabel("响应文件格式").selectOption("pptx");
+  await expect(firstAction.getByLabel("响应文件格式")).toHaveValue("");
   await firstAction.getByLabel("响应文件格式").selectOption("md");
 
   await page.route("http://127.0.0.1:9000/v1/chat/completions", async (route) => {
@@ -150,6 +164,8 @@ test("manages presales communication rounds and generates a referenced file", as
     expect(request.messages[1].content).toContain("product-introduction.txt");
     expect(request.messages[1].content).toContain("第一轮响应");
     expect(request.messages[1].content).toContain("输出需求、建议响应、边界和后续行动");
+    expect(request.messages[1].content).toContain("现状、方案、边界");
+    expect(request.messages[1].content).not.toContain("不应进入模型提示词");
     await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 第一轮响应\n\n## 客户需求\n需求 A\n\n## 待确认项\n接口范围待确认。" } }] }) });
   });
   page.once("dialog", async (dialog) => {

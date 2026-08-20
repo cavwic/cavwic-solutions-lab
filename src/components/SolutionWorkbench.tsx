@@ -377,6 +377,7 @@ function sourceIsReferenced(project: ProjectManifest, sourceId: string): boolean
     || project.presalesRounds.some((round) => round.requirementSourceIds.includes(sourceId)
       || round.referenceSourceIds.includes(sourceId)
       || round.templateSourceIds.includes(sourceId)
+      || round.actions.some((action) => action.templateSourceIds.includes(sourceId))
       || round.generatedFiles.some((file) => file.sourceId === sourceId)
       || round.analysisResults.some((result) => result.sourceId === sourceId || result.sourceIds.includes(sourceId) || result.templateSourceIds.includes(sourceId)));
 }
@@ -542,7 +543,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   };
 
-  const importPresalesFiles = async (files: FileList | null, target: { kind: "requirements" | "references" | "templates"; roundId: string }) => {
+  const importPresalesFiles = async (files: FileList | null, target: { kind: "requirements" | "references" | "templates"; roundId: string } | { kind: "action-templates"; roundId: string; actionId: string }) => {
     if (!files?.length) return;
     setBusy(true);
     setNotice(`${t.parsing}…`);
@@ -568,6 +569,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           if (target.kind === "templates") return {
             ...round,
             templateSourceIds: [...new Set([...round.templateSourceIds, ...sourceIds])],
+          };
+          if (target.kind === "action-templates") return {
+            ...round,
+            actions: round.actions.map((action) => action.id === target.actionId ? {
+              ...action,
+              templateSourceIds: [...new Set([...action.templateSourceIds, ...sourceIds])],
+            } : action),
           };
           return {
             ...round,
@@ -598,7 +606,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     selectedRequirementSourceIds: checked ? [...round.requirementSourceIds] : [],
   });
 
-  const removePresalesSource = async (round: PresalesRound, sourceId: string, kind: "requirements" | "templates") => {
+  const removePresalesSource = async (round: PresalesRound, sourceId: string, kind: "requirements" | "templates" | "action-templates", actionId?: string) => {
     const source = project.sources.find((item) => item.id === sourceId);
     const nextRounds = project.presalesRounds.map((item) => {
       if (item.id !== round.id) return item;
@@ -606,6 +614,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         ...item,
         requirementSourceIds: item.requirementSourceIds.filter((id) => id !== sourceId),
         selectedRequirementSourceIds: selectedCustomerSourceIds(item).filter((id) => id !== sourceId),
+      };
+      if (kind === "action-templates") return {
+        ...item,
+        actions: item.actions.map((action) => action.id === actionId ? {
+          ...action,
+          templateSourceIds: action.templateSourceIds.filter((id) => id !== sourceId),
+          selectedTemplateSourceIds: action.selectedTemplateSourceIds.filter((id) => id !== sourceId),
+        } : action),
       };
       return {
         ...item,
@@ -620,8 +636,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     if (removeSource) nextFiles.delete(sourceId);
     setProject(nextProject);
     setSourceFiles(nextFiles);
-    if (directoryHandle && removeSource && source) {
-      await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => undefined);
+    if (directoryHandle) {
+      if (removeSource && source) await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => undefined);
       await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
     }
   };
@@ -669,6 +685,35 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     updatePresalesRound(round.id, { analysisOutputFormat: format || undefined });
   };
 
+  const toggleActionTemplate = (round: PresalesRound, action: PresalesRoundAction, sourceId: string) => {
+    const selected = action.selectedTemplateSourceIds.includes(sourceId);
+    if (!selected && action.responseFileFormat) {
+      const source = project.sources.find((item) => item.id === sourceId);
+      if (source && templateFileFormat(source.name) !== action.responseFileFormat) {
+        alertTemplateMismatch(source.name, action.responseFileFormat);
+        return;
+      }
+    }
+    updateRoundAction(round, action.id, {
+      selectedTemplateSourceIds: selected
+        ? action.selectedTemplateSourceIds.filter((id) => id !== sourceId)
+        : [...action.selectedTemplateSourceIds, sourceId],
+    });
+  };
+
+  const setActionResponseFormat = (round: PresalesRound, action: PresalesRoundAction, format: ResponseFileFormat | "") => {
+    if (format) {
+      const mismatch = action.selectedTemplateSourceIds
+        .map((id) => project.sources.find((source) => source.id === id))
+        .find((source) => source && templateFileFormat(source.name) !== format);
+      if (mismatch) {
+        alertTemplateMismatch(mismatch.name, format);
+        return;
+      }
+    }
+    updateRoundAction(round, action.id, { responseFileFormat: format || undefined });
+  };
+
   const addRoundParticipant = (round: PresalesRound) => {
     const draft = participantDrafts[round.id] || { name: "", category: "customer" as const };
     const name = draft.name.trim();
@@ -688,6 +733,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       status: "open",
       responseFileName: "",
       fileRequirements: "",
+      templateSourceIds: [],
+      selectedTemplateSourceIds: [],
     };
     updatePresalesRound(round.id, { actions: [...round.actions, action] });
   };
@@ -1226,18 +1273,24 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
               </div>
               <div className="round-action-list">{round.actions.map((action) => {
                 const target = getActionResponseTarget(round, action);
+                const actionTemplateSources = action.templateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean);
                 return <div className="round-action-row" id={`response-action-${action.id}`} key={action.id}>
                   <div className="action-response-fields">
                     <Field label={locale === "zh" ? "响应文件名称" : "Response file name"}><input aria-label={locale === "zh" ? "响应文件名称" : "Response file name"} value={target.name} onChange={(event) => updateRoundAction(round, action.id, { responseFileName: event.target.value })}/></Field>
-                    <Field label={locale === "zh" ? "响应文件格式" : "Response file format"}><select aria-label={locale === "zh" ? "响应文件格式" : "Response file format"} value={target.format} onChange={(event) => updateRoundAction(round, action.id, { responseFileFormat: event.target.value ? event.target.value as NonNullable<PresalesRoundAction["responseFileFormat"]> : undefined })}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field>
+                    <Field label={locale === "zh" ? "响应文件格式" : "Response file format"}><select aria-label={locale === "zh" ? "响应文件格式" : "Response file format"} value={target.format} onChange={(event) => setActionResponseFormat(round, action, event.target.value as ResponseFileFormat | "")}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field>
                     <button className="row-delete" type="button" title={t.remove} aria-label={t.remove} onClick={() => { setActionSelected(action.id, false); updatePresalesRound(round.id, { actions: round.actions.filter((item) => item.id !== action.id) }); }}><Trash2 size={15}/></button>
                   </div>
                   <Field label={t.owner}><input aria-label={t.owner} placeholder={t.owner} value={action.owner} onChange={(event) => updateRoundAction(round, action.id, { owner: event.target.value })}/></Field>
                   <div className="action-meta-fields">
-                    <Field label={locale === "zh" ? "时间" : "Date"}><input aria-label={locale === "zh" ? "时间" : "Date"} type="date" value={action.dueDate} onChange={(event) => updateRoundAction(round, action.id, { dueDate: event.target.value })}/></Field>
+                    <Field label={locale === "zh" ? "截止时间" : "Deadline"}><input aria-label={locale === "zh" ? "截止时间" : "Deadline"} type="date" value={action.dueDate} onChange={(event) => updateRoundAction(round, action.id, { dueDate: event.target.value })}/></Field>
                     <Field label={locale === "zh" ? "文件状态" : "File status"}><select aria-label={locale === "zh" ? "文件状态" : "File status"} value={action.status} onChange={(event) => updateRoundAction(round, action.id, { status: event.target.value as PresalesRoundAction["status"] })}>{Object.entries(actionStatusLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field>
                   </div>
                   <Field label={locale === "zh" ? "文件要求" : "File requirements"}><textarea rows={5} aria-label={locale === "zh" ? "文件要求" : "File requirements"} placeholder={locale === "zh" ? "说明文件格式、内容、参考模板、需继承的信息及不得承诺的事项" : "Describe formatting, content, reference templates, inherited information, and prohibited commitments"} value={action.fileRequirements || ""} onChange={(event) => updateRoundAction(round, action.id, { fileRequirements: event.target.value })}/></Field>
+                  <div className="analysis-config-block template-config action-template-config">
+                    <strong>{locale === "zh" ? "响应文件模板" : "Response file templates"}</strong>
+                    <label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传模板" : "Upload templates"}<input hidden multiple type="file" accept=".docx,.pptx,.md" onChange={(event) => { void importPresalesFiles(event.target.files, { kind: "action-templates", roundId: round.id, actionId: action.id }); event.currentTarget.value = ""; }}/></label>
+                    {actionTemplateSources.length > 0 && <div className="template-source-list">{actionTemplateSources.map((source) => source && <div className={action.selectedTemplateSourceIds.includes(source.id) ? "selected" : ""} key={source.id}><button type="button" aria-pressed={action.selectedTemplateSourceIds.includes(source.id)} onClick={() => toggleActionTemplate(round, action, source.id)}><FileText size={15}/><span>{source.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除响应文件模板 ${source.name}` : `Delete response file template ${source.name}`} title={locale === "zh" ? "删除模板" : "Delete template"} onClick={() => void removePresalesSource(round, source.id, "action-templates", action.id)}><X size={14}/></button></div>)}</div>}
+                  </div>
                   <div className="action-command-row">
                     <label className="action-select" title={locale === "zh" ? "选择该项" : "Select this item"}><input type="checkbox" aria-label={locale === "zh" ? `选择响应文件 ${target.name || "未命名"}` : `Select response file ${target.name || "unnamed"}`} checked={selectedActionIds.has(action.id)} onChange={(event) => setActionSelected(action.id, event.target.checked)}/><span><Check size={16}/></span></label>
                     <button className="generate-command" type="button" disabled={busy} onClick={() => startPresalesFiles(round, [action])}><Sparkles size={17}/>{generatingActionId === `file-${action.id}` ? (locale === "zh" ? "处理中" : "Working") : (locale === "zh" ? "生成文件" : "Generate file")}</button>

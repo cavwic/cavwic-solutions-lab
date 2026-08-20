@@ -79,6 +79,7 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
   const selectedIds = new Set([
     ...round.requirementSourceIds,
     ...round.referenceSourceIds,
+    ...(targetAction?.selectedTemplateSourceIds ?? []),
   ]);
   const selectedSources = project.sources.filter((source) => selectedIds.has(source.id));
   const priorRounds = project.presalesRounds.slice(0, Math.max(0, roundIndex));

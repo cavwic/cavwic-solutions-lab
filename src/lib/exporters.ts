@@ -1,7 +1,7 @@
 import type PptxGenJS from "pptxgenjs";
 import { getActionResponseTarget } from "./presales-generation";
 import { compareBaselines, validateProject } from "./workflow";
-import { outputManifestSchema, type Locale, type ProjectManifest } from "./workspace-schema";
+import { outputManifestSchema, type Locale, type PresalesRoundAction, type ProjectManifest } from "./workspace-schema";
 import { sha256 } from "./parsers";
 
 const responseLabels = {
@@ -21,6 +21,10 @@ function safeStem(value: string): string {
 function csvCell(value: unknown): string {
   const text = String(value ?? "");
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function selectedActionTemplateNames(project: ProjectManifest, action: PresalesRoundAction): string {
+  return action.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("、") || "无";
 }
 
 export function projectToCsv(project: ProjectManifest, locale: Locale = project.locale): string {
@@ -53,7 +57,7 @@ export function presentationMarkdown(project: ProjectManifest): string {
     `## ${round.title} ${round.meetingAt}`,
     `参会人员：${round.participants.map((participant) => `${participant.name}（${participantCategoryZh[participant.category]}）`).join("、") || "待确认"}`,
     round.customerNeeds || "客户需求待确认",
-    round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `- ${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.status}\n  文件要求：${item.fileRequirements || item.title || "待填写"}`; }).join("\n"),
+    round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `- ${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.status}\n  文件要求：${item.fileRequirements || item.title || "待填写"}\n  响应文件模板：${selectedActionTemplateNames(project, item)}`; }).join("\n"),
     round.analysisResults.map((result) => `- 附件分析：${result.name} / ${result.fileName}`).join("\n"),
     round.generatedFiles.map((file) => `- 已生成: ${file.name}`).join("\n"),
   ].filter(Boolean).join("\n\n")).join("\n\n");
@@ -88,7 +92,7 @@ export function projectToMarkdown(project: ProjectManifest): string {
       `- 分析模板: ${round.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join(", ") || "无"}`,
       `- 分析结果: ${round.analysisResults.map((result) => `${result.name}（${result.fileName}）`).join(", ") || "无"}`,
       `- 生成文件: ${round.generatedFiles.map((file) => file.name).join(", ") || "无"}`,
-      round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `  - [${item.status === "done" ? "x" : " "}] ${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}\n    文件要求：${item.fileRequirements || item.title || "待填写"}`; }).join("\n"),
+      round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `  - [${item.status === "done" ? "x" : " "}] ${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "截止时间待定"}\n    文件要求：${item.fileRequirements || item.title || "待填写"}\n    响应文件模板：${selectedActionTemplateNames(project, item)}`; }).join("\n"),
     ].filter(Boolean).join("\n")).join("\n\n") || "尚无沟通记录。"}`,
     `## 招标要求响应表\n\n${project.requirements.map((item) => [
       `### ${item.title}`,
@@ -144,7 +148,7 @@ export async function projectToDocx(project: ProjectManifest): Promise<Blob> {
         new Paragraph({ text: `分析关键词：${round.keywords.join("、") || "无，执行全文分析"}` }),
         new Paragraph({ text: `分析要求：${round.analysisRequirements || "按全文分析"}` }),
         ...round.analysisResults.map((result) => new Paragraph({ text: `附件分析：${result.name} / ${result.fileName}`, bullet: { level: 0 } })),
-        ...round.actions.flatMap((item) => { const response = getActionResponseTarget(round, item); return [new Paragraph({ text: `${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"} / ${item.status}`, bullet: { level: 0 } }), new Paragraph({ text: `文件要求：${item.fileRequirements || item.title || "待填写"}` })]; }),
+        ...round.actions.flatMap((item) => { const response = getActionResponseTarget(round, item); return [new Paragraph({ text: `${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "截止时间待定"} / ${item.status}`, bullet: { level: 0 } }), new Paragraph({ text: `文件要求：${item.fileRequirements || item.title || "待填写"}` }), new Paragraph({ text: `响应文件模板：${selectedActionTemplateNames(project, item)}` })]; }),
         new Paragraph({ text: `生成文件：${round.generatedFiles.map((file) => file.name).join("、") || "无"}` }),
       ]),
       new Paragraph({ text: "招标要求响应表", heading: HeadingLevel.HEADING_1 }),
@@ -183,7 +187,7 @@ export async function projectToXlsx(project: ProjectManifest): Promise<Blob> {
     meetingAt: round.meetingAt,
     participants: round.participants.map((participant) => `${participant.name}（${participantCategoryZh[participant.category]}）`).join("\n"),
     customerNeeds: round.customerNeeds,
-    actions: round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"} / ${item.status}\n文件要求：${item.fileRequirements || item.title || "待填写"}`; }).join("\n\n"),
+    actions: round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "截止时间待定"} / ${item.status}\n文件要求：${item.fileRequirements || item.title || "待填写"}\n响应文件模板：${selectedActionTemplateNames(project, item)}`; }).join("\n\n"),
     requirements: round.requirementSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
     keywords: round.keywords.join("\n"),
     analysisRequirements: round.analysisRequirements,

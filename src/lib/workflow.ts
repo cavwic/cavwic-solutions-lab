@@ -95,6 +95,12 @@ export function validateProject(project: ProjectManifest, locale: Locale = proje
       const target = getActionResponseTarget(round, action);
       const configured = Boolean(target.name || target.format || action.owner.trim() || action.dueDate || action.fileRequirements?.trim() || action.title.trim());
       const label = target.name || (zh ? "未命名响应文件" : "unnamed response file");
+      if (target.format) {
+        const mismatch = action.selectedTemplateSourceIds
+          .map((id) => project.sources.find((source) => source.id === id))
+          .find((source) => source && templateFileFormat(source.name) !== target.format);
+        if (mismatch) issues.push({ id: `${action.id}-template-format`, severity: "warning", area: "source", targetId: action.id, message: zh ? `响应文件模板“${mismatch.name}”与“${label}”的输出格式不匹配。` : `Response file template "${mismatch.name}" does not match the output format for "${label}".` });
+      }
       if (configured && action.status !== "done" && !action.owner.trim()) issues.push({ id: `${action.id}-owner`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的“${label}”没有项目责任人。` : `"${label}" in "${round.title}" has no project owner.` });
       if (configured && !target.name) issues.push({ id: `${action.id}-response-file`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中有响应文件未填写名称。` : `A response file in "${round.title}" has no name.` });
       if (configured && !target.format) issues.push({ id: `${action.id}-response-format`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的“${label}”未选择文件格式。` : `"${label}" in "${round.title}" has no file format.` });

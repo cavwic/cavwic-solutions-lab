@@ -35,7 +35,9 @@ describe("presales generation", () => {
     const project = createEmptyProject("zh");
     const round = project.presalesRounds[0];
     round.customerNeeds = "生成客户响应文件";
-    const action = { id: "action-1", title: "", owner: "方案负责人", dueDate: "2026-09-01", status: "open" as const, responseFileName: "第一轮响应", responseFileFormat: "docx" as const, fileRequirements: "说明接口范围和待确认边界" };
+    const template = { id: "template-1", name: "响应模板.docx", fileType: "docx" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-20", requiresOcr: false, segments: [{ id: "paragraph-1", locatorKind: "paragraph" as const, locator: "段落 1", text: "固定章节：需求理解、响应方案、待确认边界" }] };
+    project.sources.push(template);
+    const action = { id: "action-1", title: "", owner: "方案负责人", dueDate: "2026-09-01", status: "open" as const, responseFileName: "第一轮响应", responseFileFormat: "docx" as const, fileRequirements: "说明接口范围和待确认边界", templateSourceIds: [template.id], selectedTemplateSourceIds: [template.id] };
     round.actions = [action];
     const task = buildCodexPresalesTask(project, round, action);
     expect(task.name).toMatch(/^presales-.+\.md$/);
@@ -45,12 +47,13 @@ describe("presales generation", () => {
     expect(task.content).toContain("actionId 为 action-1");
     expect(task.content).toContain("生成客户响应文件");
     expect(task.content).toContain("说明接口范围和待确认边界");
+    expect(task.content).toContain("固定章节：需求理解、响应方案、待确认边界");
   });
 
   it("keeps new response items blank instead of inheriting the legacy round defaults", () => {
     const project = createEmptyProject("zh");
     const round = project.presalesRounds[0];
-    const action = { id: "action-new", title: "", owner: "", dueDate: "", status: "open" as const, responseFileName: "", fileRequirements: "" };
+    const action = { id: "action-new", title: "", owner: "", dueDate: "", status: "open" as const, responseFileName: "", fileRequirements: "", templateSourceIds: [], selectedTemplateSourceIds: [] };
     round.actions = [action];
     expect(getActionResponseTarget(round, action)).toEqual({ name: "", format: "" });
   });

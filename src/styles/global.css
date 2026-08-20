@@ -210,6 +210,8 @@ textarea { padding: 11px; resize: vertical; }
 .round-action-row input, .round-action-row select { min-height: 42px; font-size: 14px; }
 .round-action-row textarea { min-height: 128px; line-height: 1.65; }
 .round-action-row > .field > span, .action-meta-fields .field > span { font-size: 12px; }
+.action-template-config { padding-bottom: 12px; }
+.action-template-config > strong { color: var(--ink-2); }
 .action-response-fields { display: grid; grid-template-columns: minmax(0, 1fr) 128px 36px; gap: 8px; align-items: end; }
 .action-response-fields .field > span { color: var(--signal); font-size: 12px; }
 .action-response-fields .row-delete { margin-bottom: 2px; }

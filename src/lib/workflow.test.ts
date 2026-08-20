@@ -81,4 +81,22 @@ describe("solution workflow rules", () => {
     expect(parsed.enterpriseContext.sourceIds).toEqual([]);
     expect(parsed.presalesRounds).toEqual([]);
   });
+
+  it("opens response actions created before action templates were added", () => {
+    const legacy = createEmptyProject("zh");
+    const action = {
+      id: "legacy-response",
+      title: "",
+      owner: "方案负责人",
+      dueDate: "2026-09-01",
+      status: "open" as const,
+      responseFileName: "旧响应文件",
+      responseFileFormat: "docx" as const,
+      fileRequirements: "沿用原有要求",
+    };
+    legacy.presalesRounds[0].actions = [action as never];
+    const parsed = projectManifestSchema.parse(legacy);
+    expect(parsed.presalesRounds[0].actions[0].templateSourceIds).toEqual([]);
+    expect(parsed.presalesRounds[0].actions[0].selectedTemplateSourceIds).toEqual([]);
+  });
 });

@@ -160,6 +160,8 @@ export const presalesRoundActionSchema = z.object({
   responseFileName: z.string().optional(),
   responseFileFormat: z.enum(["md", "docx", "pptx"]).optional(),
   fileRequirements: z.string().optional(),
+  templateSourceIds: z.array(z.string()).default([]),
+  selectedTemplateSourceIds: z.array(z.string()).default([]),
 });
 
 export const presalesGeneratedFileSchema = z.object({
