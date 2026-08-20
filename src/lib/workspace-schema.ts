@@ -24,7 +24,8 @@ export const responseStatusSchema = z.enum([
 ]);
 export const deviationTypeSchema = z.enum(["positive", "none", "negative", "pending"]);
 export const reviewStateSchema = z.enum(["draft", "reviewed", "approved"]);
-export const sourceFileTypeSchema = z.enum(["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "json", "ocr"]);
+export const sourceFileTypeSchema = z.enum(["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "json", "png", "jpg", "jpeg", "webp", "ocr"]);
+export const preprocessStatusSchema = z.enum(["uploaded", "ready", "needs-ocr", "skipped", "processing", "failed"]);
 
 export const sourceSegmentSchema = z.object({
   id: z.string().min(1),
@@ -42,6 +43,9 @@ export const sourceDocumentSchema = z.object({
   sha256: z.string().min(1),
   importedAt: z.string(),
   requiresOcr: z.boolean().default(false),
+  preprocessStatus: preprocessStatusSchema.default("uploaded"),
+  preprocessedAt: z.string().default(""),
+  preprocessMessage: z.string().default(""),
   segments: z.array(sourceSegmentSchema),
 });
 
@@ -220,6 +224,68 @@ export const presalesRoundSchema = z.object({
   generatedFiles: z.array(presalesGeneratedFileSchema),
 });
 
+export const tenderOutputFormatSchema = z.enum(["md", "docx", "pptx", "xlsx"]);
+
+export const tenderClarificationRoundSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  occurredAt: z.string(),
+  sourceIds: z.array(z.string()).default([]),
+  selectedSourceIds: z.array(z.string()).default([]),
+});
+
+export const tenderDifferenceSchema = z.object({
+  title: z.string().min(1),
+  presales: z.string().default(""),
+  tender: z.string().default(""),
+  relation: z.enum(["added", "changed", "unchanged", "removed", "conflict"]).default("changed"),
+  notes: z.string().default(""),
+});
+
+export const tenderAnalysisResultSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum(["requirements", "comparison"]),
+  name: z.string().min(1),
+  fileName: z.string().min(1),
+  format: tenderOutputFormatSchema,
+  createdAt: z.string(),
+  provider: z.enum(["local", "cloud"]),
+  model: z.string(),
+  sourceId: z.string(),
+  relativePath: z.string(),
+  prompt: z.string(),
+  keywords: z.array(z.string()).default([]),
+  sourceIds: z.array(z.string()).default([]),
+  templateSourceIds: z.array(z.string()).default([]),
+  differences: z.array(tenderDifferenceSchema).default([]),
+});
+
+export const tenderAnalysisConfigSchema = z.object({
+  keywords: z.array(z.string()).default([]),
+  analysisRequirements: z.string().default(""),
+  templateSourceIds: z.array(z.string()).default([]),
+  selectedTemplateSourceIds: z.array(z.string()).default([]),
+  outputFormat: tenderOutputFormatSchema.optional(),
+  results: z.array(tenderAnalysisResultSchema).default([]),
+});
+
+export const tenderComparisonConfigSchema = z.object({
+  selectedPresalesSourceIds: z.array(z.string()).default([]),
+  templateSourceIds: z.array(z.string()).default([]),
+  selectedTemplateSourceIds: z.array(z.string()).default([]),
+  outputFormat: tenderOutputFormatSchema.optional(),
+  results: z.array(tenderAnalysisResultSchema).default([]),
+});
+
+export const bidFileChecklistItemSchema = z.object({
+  id: z.string().min(1),
+  title: z.string().min(1),
+  category: z.enum(["technical", "business", "qualification", "delivery", "other"]),
+  status: z.enum(["pending", "confirmed"]).default("pending"),
+  sourceResultId: z.string().default(""),
+  notes: z.string().default(""),
+});
+
 export const projectManifestSchema = z.object({
   schemaVersion: z.literal(SCHEMA_VERSION),
   id: z.string().min(1),
@@ -244,6 +310,12 @@ export const projectManifestSchema = z.object({
   pocPlan: pocPlanSchema,
   enterpriseContext: enterpriseContextSchema.default({ companyName: "", platform: "", importedAt: "", notes: "", sourceIds: [] }),
   presalesRounds: z.array(presalesRoundSchema).default([]),
+  tenderSourceIds: z.array(z.string()).default([]),
+  selectedTenderSourceIds: z.array(z.string()).default([]),
+  tenderClarificationRounds: z.array(tenderClarificationRoundSchema).default([]),
+  tenderAnalysis: tenderAnalysisConfigSchema.default({ keywords: [], analysisRequirements: "", templateSourceIds: [], selectedTemplateSourceIds: [], results: [] }),
+  tenderComparison: tenderComparisonConfigSchema.default({ selectedPresalesSourceIds: [], templateSourceIds: [], selectedTemplateSourceIds: [], results: [] }),
+  bidFileChecklist: z.array(bidFileChecklistItemSchema).default([]),
   handoverNotes: z.string(),
 });
 
@@ -282,6 +354,13 @@ export type PresalesGeneratedFile = z.infer<typeof presalesGeneratedFileSchema>;
 export type PresalesAnalysisResult = z.infer<typeof presalesAnalysisResultSchema>;
 export type PresalesParticipant = z.infer<typeof presalesParticipantSchema>;
 export type PresalesRound = z.infer<typeof presalesRoundSchema>;
+export type PreprocessStatus = z.infer<typeof preprocessStatusSchema>;
+export type TenderOutputFormat = z.infer<typeof tenderOutputFormatSchema>;
+export type TenderClarificationRound = z.infer<typeof tenderClarificationRoundSchema>;
+export type TenderAnalysisResult = z.infer<typeof tenderAnalysisResultSchema>;
+export type TenderAnalysisConfig = z.infer<typeof tenderAnalysisConfigSchema>;
+export type TenderComparisonConfig = z.infer<typeof tenderComparisonConfigSchema>;
+export type BidFileChecklistItem = z.infer<typeof bidFileChecklistItemSchema>;
 export type ProjectManifest = z.infer<typeof projectManifestSchema>;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
 export type OutputManifest = z.infer<typeof outputManifestSchema>;
@@ -346,6 +425,12 @@ export function createEmptyProject(locale: Locale = "zh"): ProjectManifest {
     pocPlan: { objective: "", demoScope: "", acceptance: "", failureAndFallback: "" },
     enterpriseContext: { companyName: "", platform: "", importedAt: "", notes: "", sourceIds: [] },
     presalesRounds: [createPresalesRound(locale, 1)],
+    tenderSourceIds: [],
+    selectedTenderSourceIds: [],
+    tenderClarificationRounds: [],
+    tenderAnalysis: { keywords: [], analysisRequirements: "", templateSourceIds: [], selectedTemplateSourceIds: [], results: [] },
+    tenderComparison: { selectedPresalesSourceIds: [], templateSourceIds: [], selectedTemplateSourceIds: [], results: [] },
+    bidFileChecklist: [],
     handoverNotes: "",
   };
 }

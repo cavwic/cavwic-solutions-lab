@@ -16,6 +16,7 @@ export const modelActionReturnStateSchema = z.object({
   selectedRequirementId: z.string(),
   selectedActionIds: z.array(z.string()),
   expandedAnalysisId: z.string(),
+  targetIds: z.array(z.string()).default([]),
   taskKind: z.enum(["workflow", "extract", "bid"]),
   savedAt: z.iso.datetime(),
 });

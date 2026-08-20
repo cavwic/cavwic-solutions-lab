@@ -14,6 +14,7 @@ export type DirectoryHandleLike = {
 
 const HANDLE_DATABASE = "cavwic-solutions-lab";
 const HANDLE_STORE = "workspace-handles";
+const SOURCE_FILE_STORE = "source-files";
 const ACTIVE_HANDLE_KEY = "active-workspace";
 const TASK_OUTPUT_HANDLE_KEY = "task-output";
 
@@ -32,13 +33,80 @@ async function writeFile(directory: DirectoryHandleLike, name: string, content: 
 
 function openHandleDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(HANDLE_DATABASE, 1);
+    const request = indexedDB.open(HANDLE_DATABASE, 2);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains(HANDLE_STORE)) request.result.createObjectStore(HANDLE_STORE);
+      if (!request.result.objectStoreNames.contains(SOURCE_FILE_STORE)) request.result.createObjectStore(SOURCE_FILE_STORE);
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+type PersistedSourceFile = { projectId: string; sourceId: string; file: File };
+
+export async function persistSourceFiles(projectId: string, files: Map<string, File>): Promise<void> {
+  if (typeof indexedDB === "undefined" || !files.size) return;
+  const database = await openHandleDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(SOURCE_FILE_STORE, "readwrite");
+    const store = transaction.objectStore(SOURCE_FILE_STORE);
+    for (const [sourceId, file] of files) store.put({ projectId, sourceId, file } satisfies PersistedSourceFile, `${projectId}:${sourceId}`);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+export async function restoreSourceFiles(projectId: string): Promise<Map<string, File>> {
+  const files = new Map<string, File>();
+  if (typeof indexedDB === "undefined") return files;
+  const database = await openHandleDatabase();
+  const records = await new Promise<PersistedSourceFile[]>((resolve, reject) => {
+    const request = database.transaction(SOURCE_FILE_STORE, "readonly").objectStore(SOURCE_FILE_STORE).getAll();
+    request.onsuccess = () => resolve((request.result || []) as PersistedSourceFile[]);
+    request.onerror = () => reject(request.error);
+  });
+  database.close();
+  for (const record of records) if (record.projectId === projectId && record.file) files.set(record.sourceId, record.file);
+  return files;
+}
+
+export async function removePersistedSourceFile(projectId: string, sourceId: string): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  const database = await openHandleDatabase();
+  await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(SOURCE_FILE_STORE, "readwrite");
+    transaction.objectStore(SOURCE_FILE_STORE).delete(`${projectId}:${sourceId}`);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
+}
+
+export async function clearPersistedSourceFiles(projectId: string): Promise<void> {
+  if (typeof indexedDB === "undefined") return;
+  const database = await openHandleDatabase();
+  const records = await new Promise<Array<{ key: IDBValidKey; value: PersistedSourceFile }>>((resolve, reject) => {
+    const entries: Array<{ key: IDBValidKey; value: PersistedSourceFile }> = [];
+    const request = database.transaction(SOURCE_FILE_STORE, "readonly").objectStore(SOURCE_FILE_STORE).openCursor();
+    request.onsuccess = () => {
+      const cursor = request.result;
+      if (!cursor) return resolve(entries);
+      entries.push({ key: cursor.key, value: cursor.value as PersistedSourceFile });
+      cursor.continue();
+    };
+    request.onerror = () => reject(request.error);
+  });
+  const keys = records.filter((entry) => entry.value.projectId === projectId).map((entry) => entry.key);
+  if (keys.length) await new Promise<void>((resolve, reject) => {
+    const transaction = database.transaction(SOURCE_FILE_STORE, "readwrite");
+    const store = transaction.objectStore(SOURCE_FILE_STORE);
+    keys.forEach((key) => store.delete(key));
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+  });
+  database.close();
 }
 
 async function persistDirectoryHandle(key: string, handle: DirectoryHandleLike): Promise<void> {
@@ -219,6 +287,21 @@ export async function loadActiveProject(handle: DirectoryHandleLike): Promise<Pr
   const projects = await handle.getDirectoryHandle("projects");
   const projectDirectory = await projects.getDirectoryHandle(workspace.activeProjectId);
   return projectManifestSchema.parse(await readJson(projectDirectory, "project.json"));
+}
+
+export async function loadSourceFilesFromDirectory(handle: DirectoryHandleLike, project: ProjectManifest): Promise<Map<string, File>> {
+  const files = new Map<string, File>();
+  const projects = await handle.getDirectoryHandle("projects");
+  const projectDirectory = await projects.getDirectoryHandle(project.id);
+  const sources = await projectDirectory.getDirectoryHandle("sources");
+  for (const source of project.sources) {
+    try {
+      files.set(source.id, await sources.getFileHandle(source.name).then((fileHandle) => fileHandle.getFile()));
+    } catch {
+      // A project manifest may intentionally omit original source files.
+    }
+  }
+  return files;
 }
 
 export async function importProjectArchive(file: File): Promise<{ project: ProjectManifest; sourceFiles: Map<string, File> }> {

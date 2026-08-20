@@ -24,7 +24,7 @@ test("theme and language controls preserve a dense responsive layout", async ({ 
     localStorage.setItem("cavwic-lab-theme", "light");
   });
   await page.reload();
-  await page.getByRole("button", { name: /招标要求/ }).click();
+  await page.getByRole("button", { name: /招标/ }).click();
   await expectNoHorizontalOverflow(page);
 
   await page.getByRole("button", { name: "切换到深色模式" }).click();
@@ -34,13 +34,39 @@ test("theme and language controls preserve a dense responsive layout", async ({ 
   await expect(page.getByText("技术方案", { exact: true }).last()).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("bid-package-dark-zh.png"), fullPage: true });
-  await page.getByRole("button", { name: "招标要求" }).click();
+  await page.getByRole("button", { name: "招标" }).click();
   await page.getByRole("button", { name: "Switch to English" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Solution Project Workbench");
-  await expect(page.getByText("SOURCE / TRACEABILITY")).toBeVisible();
+  await expect(page.getByText("TENDER INPUT / PREPROCESSING")).toBeVisible();
   await expect(page.getByRole("link", { name: "模型配置 / Model configuration" })).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("requirements-dark-en.png"), fullPage: true });
+});
+
+test("tender preprocessing and clarification workspace stays readable", async ({ page }, testInfo) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("cavwic-lab-locale", "zh");
+    localStorage.setItem("cavwic-lab-theme", "light");
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "招标" }).click();
+  await page.locator('#tender-files input[type="file"]').setInputFiles([
+    { name: "正式招标文件-技术与验收要求.txt", mimeType: "text/plain", buffer: Buffer.from("投标人应提交技术方案、部署手册、验收方案及完整进度计划。") },
+    { name: "扫描版资格证明附件.png", mimeType: "image/png", buffer: Buffer.from([137, 80, 78, 71]) },
+  ]);
+  await page.locator("#tender-files .tender-file-toolbar").getByRole("button", { name: "预处理" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "否" }).click();
+  await page.getByRole("button", { name: "新增澄清节点" }).click();
+  const clarification = page.locator(".clarification-row").first();
+  await clarification.getByLabel("澄清节点名称").fill("第一次澄清及补遗");
+  await clarification.locator("label.file-command", { hasText: "导入澄清文件" }).locator("input[type=file]").setInputFiles({ name: "交付周期澄清.txt", mimeType: "text/plain", buffer: Buffer.from("交付周期最终调整为 60 天，以本澄清文件为准。") });
+  await page.getByRole("button", { name: "技术参数", exact: true }).click();
+  await page.getByLabel("招标分析要求").fill("提取投标时间、技术参数、评标办法、资质和文件清单，保留来源位置。");
+  await page.getByLabel("招标分析文件格式").selectOption("md");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("tender-workspace-zh.png"), fullPage: true });
 });
 
 test("presales communication workspace remains readable", async ({ page }, testInfo) => {

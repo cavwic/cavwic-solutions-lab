@@ -35,7 +35,7 @@ describe("presales generation", () => {
     const project = createEmptyProject("zh");
     const round = project.presalesRounds[0];
     round.customerNeeds = "生成客户响应文件";
-    const template = { id: "template-1", name: "响应模板.docx", fileType: "docx" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-20", requiresOcr: false, segments: [{ id: "paragraph-1", locatorKind: "paragraph" as const, locator: "段落 1", text: "固定章节：需求理解、响应方案、待确认边界" }] };
+    const template = { id: "template-1", name: "响应模板.docx", fileType: "docx" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-20", requiresOcr: false, preprocessStatus: "ready" as const, preprocessedAt: "2026-08-20", preprocessMessage: "", segments: [{ id: "paragraph-1", locatorKind: "paragraph" as const, locator: "段落 1", text: "固定章节：需求理解、响应方案、待确认边界" }] };
     project.sources.push(template);
     const action = { id: "action-1", title: "", owner: "方案负责人", dueDate: "2026-09-01", status: "open" as const, responseFileName: "第一轮响应", responseFileFormat: "docx" as const, fileRequirements: "说明接口范围和待确认边界", templateSourceIds: [template.id], selectedTemplateSourceIds: [template.id] };
     round.actions = [action];
@@ -64,7 +64,7 @@ describe("presales generation", () => {
     round.keywords = ["技术参数"];
     round.analysisRequirements = "列出参数、来源位置和待确认项";
     round.participants = [{ id: "participant-1", name: "客户项目经理", category: "customer" }];
-    const source = { id: "source-1", name: "客户需求.md", fileType: "md" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-17", requiresOcr: false, segments: [{ id: "line-1", locatorKind: "line" as const, locator: "行 1", text: "额定负载 5 kg" }] };
+    const source = { id: "source-1", name: "客户需求.md", fileType: "md" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-17", requiresOcr: false, preprocessStatus: "ready" as const, preprocessedAt: "2026-08-17", preprocessMessage: "", segments: [{ id: "line-1", locatorKind: "line" as const, locator: "行 1", text: "额定负载 5 kg" }] };
     const template = { ...source, id: "template-1", name: "分析模板.md", segments: [{ ...source.segments[0], id: "template-line", text: "章节：技术要求" }] };
     const prompt = buildCustomerNeedsAnalysisPrompt(project, round, [source], [template]);
     expect(prompt).toContain("提高以下关键词");
@@ -81,7 +81,7 @@ describe("presales generation", () => {
     round.keywords = ["技术参数"];
     round.analysisRequirements = "列出参数和来源位置";
     round.analysisOutputFormat = "docx";
-    const source = { id: "source-1", name: "客户需求.md", fileType: "md" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-18", requiresOcr: false, segments: [{ id: "line-1", locatorKind: "line" as const, locator: "行 1", text: "额定负载 5 kg" }] };
+    const source = { id: "source-1", name: "客户需求.md", fileType: "md" as const, version: "1.0", size: 12, sha256: "abc", importedAt: "2026-08-18", requiresOcr: false, preprocessStatus: "ready" as const, preprocessedAt: "2026-08-18", preprocessMessage: "", segments: [{ id: "line-1", locatorKind: "line" as const, locator: "行 1", text: "额定负载 5 kg" }] };
     const task = buildCodexCustomerAnalysisTask(project, round, [source], []);
     expect(task.name).toMatch(/^presales-analysis-.+\.md$/);
     expect(task.outputName).toBe("技术参数分析结果.docx");

@@ -1,7 +1,7 @@
 import type { SourceDocument, SourceSegment } from "./workspace-schema";
 import { createId } from "./workspace-schema";
 
-const supportedExtensions = ["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "json"] as const;
+const supportedExtensions = ["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "json", "png", "jpg", "jpeg", "webp"] as const;
 type SupportedExtension = (typeof supportedExtensions)[number];
 
 function extensionOf(name: string): SupportedExtension {
@@ -56,6 +56,18 @@ export function parsePlainText(text: string, documentId: string): SourceSegment[
     locator: `第 ${index + 1} 行`,
     text: line,
   })).filter((segment) => segment.text.length > 0);
+}
+
+export function hasReadableSourceText(source: Pick<SourceDocument, "requiresOcr" | "segments">): boolean {
+  if (source.requiresOcr) return false;
+  const text = source.segments.map((segment) => segment.text).join(" ").trim();
+  if (text.length < 24) return false;
+  const replacementCount = (text.match(/[�]/g) || []).length;
+  const mojibakeCount = (text.match(/锟斤拷|ï¿½|Ã.|Â.|æ\w|ðŸ/g) || []).length;
+  const readableCount = (text.match(/[\p{L}\p{N}\p{P}\p{Z}\u3400-\u9fff]/gu) || []).length;
+  return replacementCount / text.length < 0.01
+    && mojibakeCount < 2
+    && readableCount / text.length >= 0.72;
 }
 
 async function parsePdf(buffer: ArrayBuffer, documentId: string): Promise<{ segments: SourceSegment[]; requiresOcr: boolean }> {
@@ -171,6 +183,7 @@ export async function parseSourceFile(file: File): Promise<SourceDocument> {
   else if (extension === "docx") segments = await parseDocx(buffer, documentId);
   else if (extension === "xlsx") segments = await parseXlsx(buffer, documentId);
   else if (extension === "pptx") segments = await parsePptx(buffer, documentId);
+  else if (["png", "jpg", "jpeg", "webp"].includes(extension)) requiresOcr = true;
   else segments = parsePlainText(await file.text(), documentId);
   return {
     id: documentId,
@@ -181,6 +194,9 @@ export async function parseSourceFile(file: File): Promise<SourceDocument> {
     sha256: digest,
     importedAt: new Date().toISOString(),
     requiresOcr,
+    preprocessStatus: "uploaded",
+    preprocessedAt: "",
+    preprocessMessage: "",
     segments,
   };
 }

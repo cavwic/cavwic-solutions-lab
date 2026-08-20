@@ -13,6 +13,7 @@ const deviationLabels = {
   en: { positive: "Positive", none: "None", negative: "Negative", pending: "Pending" },
 } as const;
 const participantCategoryZh = { customer: "客户", "third-party": "第三方", internal: "公司内人员" } as const;
+const preprocessStatusZh = { uploaded: "已上传", ready: "上传并预处理完成", "needs-ocr": "需要 OCR", skipped: "仅上传，未处理", processing: "处理中", failed: "处理失败" } as const;
 
 function safeStem(value: string): string {
   return value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").slice(0, 80) || "solution-project";
@@ -73,7 +74,8 @@ export function presentationMarkdown(project: ProjectManifest): string {
 }
 
 export function projectToMarkdown(project: ProjectManifest): string {
-  const diffs = compareBaselines(project.requirements);
+  const linkedDiffs = compareBaselines(project.requirements);
+  const analyzedDiffs = project.tenderComparison.results.flatMap((result) => result.differences.map((difference) => ({ result: result.name, ...difference })));
   const issues = validateProject(project);
   const sections = [
     `# ${project.name}`,
@@ -94,6 +96,9 @@ export function projectToMarkdown(project: ProjectManifest): string {
       `- 生成文件: ${round.generatedFiles.map((file) => file.name).join(", ") || "无"}`,
       round.actions.map((item) => { const response = getActionResponseTarget(round, item); return `  - [${item.status === "done" ? "x" : " "}] ${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "截止时间待定"}\n    文件要求：${item.fileRequirements || item.title || "待填写"}\n    响应文件模板：${selectedActionTemplateNames(project, item)}`; }).join("\n"),
     ].filter(Boolean).join("\n")).join("\n\n") || "尚无沟通记录。"}`,
+    `## 招标文件\n\n${project.tenderSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter(Boolean).map((source) => `- [${project.selectedTenderSourceIds.includes(source!.id) ? "x" : " "}] ${source!.name} / ${preprocessStatusZh[source!.preprocessStatus]} / ${source!.sha256}`).join("\n") || "尚未导入招标文件。"}`,
+    `## 澄清及相关文件\n\n${project.tenderClarificationRounds.map((round) => `### ${round.title}\n\n- 时间: ${round.occurredAt || "待确认"}\n- 已选文件: ${round.selectedSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("、") || "无"}`).join("\n\n") || "尚无澄清记录。"}`,
+    `## 招标文件分析\n\n${project.tenderAnalysis.results.map((result) => `- ${result.name} / ${result.fileName} / ${result.relativePath}`).join("\n") || "尚无分析结果。"}`,
     `## 招标要求响应表\n\n${project.requirements.map((item) => [
       `### ${item.title}`,
       `- 基线: ${item.baseline}`,
@@ -105,7 +110,8 @@ export function projectToMarkdown(project: ProjectManifest): string {
       `- 证据: ${item.evidenceRefs.join(", ") || "缺少证据"}`,
       `- 验收: ${item.acceptanceCriteria || "待定义"}`,
     ].join("\n")).join("\n\n") || "尚无需求记录。"}`,
-    `## 基线差异\n\n${diffs.map((item) => `- ${item.relation}: ${item.tender?.title || item.discovery?.title || item.id}`).join("\n") || "尚无可比较基线。"}`,
+    `## 售前与招标差异\n\n${analyzedDiffs.map((item) => `- [${item.relation}] ${item.title}: ${item.presales || "未提供"} -> ${item.tender || "未提供"}（${item.notes || item.result}）`).join("\n") || linkedDiffs.map((item) => `- ${item.relation}: ${item.tender?.title || item.discovery?.title || item.id}`).join("\n") || "尚无可比较基线。"}`,
+    `## 投标文件清单\n\n${project.bidFileChecklist.map((item) => `- [${item.status === "confirmed" ? "x" : " "}] ${item.title} / ${item.category} / ${item.notes || "无说明"}`).join("\n") || "尚未生成投标文件清单。"}`,
     `## 技术方案章节\n\n${project.sections.map((item) => `### ${item.title}\n\n${item.body || "待编制"}\n\n关联要求: ${item.requirementIds.join(", ") || "无"}\n\n关联证据: ${item.evidenceIds.join(", ") || "无"}`).join("\n\n") || "尚无技术方案章节。"}`,
     `## 执行与交底清单\n\n${project.actions.map((item) => `- [${item.status === "done" ? "x" : " "}] ${item.title} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}`).join("\n") || "暂无任务。"}`,
     `## 审阅问题\n\n${issues.map((item) => `- ${item.severity.toUpperCase()}: ${item.message}`).join("\n") || "未发现阻断问题。"}`,
@@ -151,6 +157,16 @@ export async function projectToDocx(project: ProjectManifest): Promise<Blob> {
         ...round.actions.flatMap((item) => { const response = getActionResponseTarget(round, item); return [new Paragraph({ text: `${response.name || "响应文件待定"}${response.format ? `.${response.format}` : " / 格式待选择"} / ${item.owner || "责任人待定"} / ${item.dueDate || "截止时间待定"} / ${item.status}`, bullet: { level: 0 } }), new Paragraph({ text: `文件要求：${item.fileRequirements || item.title || "待填写"}` }), new Paragraph({ text: `响应文件模板：${selectedActionTemplateNames(project, item)}` })]; }),
         new Paragraph({ text: `生成文件：${round.generatedFiles.map((file) => file.name).join("、") || "无"}` }),
       ]),
+      new Paragraph({ text: "招标文件", heading: HeadingLevel.HEADING_1 }),
+      ...project.tenderSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is NonNullable<typeof source> => Boolean(source)).map((source) => new Paragraph({ text: `${source.name} / ${preprocessStatusZh[source.preprocessStatus]} / ${source.sha256}`, bullet: { level: 0 } })),
+      new Paragraph({ text: "澄清及相关文件", heading: HeadingLevel.HEADING_1 }),
+      ...project.tenderClarificationRounds.flatMap((round) => [new Paragraph({ text: round.title, heading: HeadingLevel.HEADING_2 }), new Paragraph({ text: `时间：${round.occurredAt || "待确认"}` }), new Paragraph({ text: `已选文件：${round.selectedSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("、") || "无"}` })]),
+      new Paragraph({ text: "招标文件分析", heading: HeadingLevel.HEADING_1 }),
+      ...project.tenderAnalysis.results.map((result) => new Paragraph({ text: `${result.name} / ${result.fileName} / ${result.relativePath}`, bullet: { level: 0 } })),
+      new Paragraph({ text: "售前与招标差异", heading: HeadingLevel.HEADING_1 }),
+      ...project.tenderComparison.results.flatMap((result) => result.differences.map((difference) => new Paragraph({ text: `${difference.title}：${difference.presales || "未提供"} -> ${difference.tender || "未提供"} / ${difference.relation} / ${difference.notes || result.name}`, bullet: { level: 0 } }))),
+      new Paragraph({ text: "投标文件清单", heading: HeadingLevel.HEADING_1 }),
+      ...project.bidFileChecklist.map((item) => new Paragraph({ text: `${item.status === "confirmed" ? "[已确认]" : "[待确认]"} ${item.title} / ${item.category} / ${item.notes || "无说明"}`, bullet: { level: 0 } })),
       new Paragraph({ text: "招标要求响应表", heading: HeadingLevel.HEADING_1 }),
       new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } }),
       new Paragraph({ text: "技术方案章节", heading: HeadingLevel.HEADING_1 }),
@@ -196,6 +212,20 @@ export async function projectToXlsx(project: ProjectManifest): Promise<Blob> {
     references: round.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("\n"),
     outputs: round.generatedFiles.map((file) => file.name).join("\n"),
   }));
+
+  const tenderFiles = workbook.addWorksheet("招标文件与澄清", { views: [{ state: "frozen", ySplit: 1 }] });
+  tenderFiles.columns = [{ header: "类型", key: "kind", width: 16 }, { header: "节点", key: "round", width: 24 }, { header: "时间", key: "occurredAt", width: 22 }, { header: "文件", key: "name", width: 40 }, { header: "已选择", key: "selected", width: 12 }, { header: "预处理状态", key: "status", width: 24 }, { header: "SHA-256", key: "sha256", width: 68 }];
+  project.tenderSourceIds.forEach((id) => { const source = project.sources.find((item) => item.id === id); if (source) tenderFiles.addRow({ kind: "招标文件", round: "", occurredAt: "", name: source.name, selected: project.selectedTenderSourceIds.includes(id) ? "是" : "否", status: preprocessStatusZh[source.preprocessStatus], sha256: source.sha256 }); });
+  project.tenderClarificationRounds.forEach((round) => round.sourceIds.forEach((id) => { const source = project.sources.find((item) => item.id === id); if (source) tenderFiles.addRow({ kind: "澄清文件", round: round.title, occurredAt: round.occurredAt, name: source.name, selected: round.selectedSourceIds.includes(id) ? "是" : "否", status: preprocessStatusZh[source.preprocessStatus], sha256: source.sha256 }); }));
+
+  const tenderAnalysis = workbook.addWorksheet("招标分析与差异", { views: [{ state: "frozen", ySplit: 1 }] });
+  tenderAnalysis.columns = [{ header: "分析批次", key: "result", width: 32 }, { header: "类型", key: "kind", width: 16 }, { header: "文件", key: "fileName", width: 36 }, { header: "差异项", key: "title", width: 30 }, { header: "售前基线", key: "presales", width: 44 }, { header: "招标基线", key: "tender", width: 44 }, { header: "关系", key: "relation", width: 16 }, { header: "说明", key: "notes", width: 40 }];
+  project.tenderAnalysis.results.forEach((result) => tenderAnalysis.addRow({ result: result.name, kind: "招标要求分析", fileName: result.fileName }));
+  project.tenderComparison.results.forEach((result) => result.differences.length ? result.differences.forEach((difference) => tenderAnalysis.addRow({ result: result.name, kind: "售前与招标对比", fileName: result.fileName, ...difference })) : tenderAnalysis.addRow({ result: result.name, kind: "售前与招标对比", fileName: result.fileName }));
+
+  const bidFiles = workbook.addWorksheet("投标文件清单", { views: [{ state: "frozen", ySplit: 1 }] });
+  bidFiles.columns = [{ header: "文件名称", key: "title", width: 42 }, { header: "类别", key: "category", width: 18 }, { header: "状态", key: "status", width: 16 }, { header: "来源分析", key: "sourceResultId", width: 30 }, { header: "说明", key: "notes", width: 52 }];
+  project.bidFileChecklist.forEach((item) => bidFiles.addRow(item));
 
   const evidence = workbook.addWorksheet("资料与证据索引", { views: [{ state: "frozen", ySplit: 1 }] });
   evidence.columns = [{ header: "编号", key: "id", width: 24 }, { header: "资料名称", key: "title", width: 36 }, { header: "类型", key: "kind", width: 22 }, { header: "文件", key: "fileName", width: 32 }, { header: "版本", key: "version", width: 12 }, { header: "核验日期", key: "verifiedAt", width: 16 }, { header: "复核日期", key: "expiresAt", width: 16 }, { header: "说明", key: "notes", width: 48 }];
@@ -253,16 +283,25 @@ export async function projectToPptx(project: ProjectManifest): Promise<Blob> {
   ].join("\n")).join("\n\n") || "尚无沟通记录。";
   slide.addText(presalesText, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 14, color: "24302D", breakLine: false, valign: "top", margin: 0 });
 
-  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "03 / REQUIREMENTS", "已审阅的需求与响应");
+  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "03 / TENDER", "招标文件、澄清与差异");
+  const tenderText = [
+    `招标文件  ${project.tenderSourceIds.length} 个  |  澄清轮次  ${project.tenderClarificationRounds.length} 次`,
+    `分析结果  ${project.tenderAnalysis.results.length} 份  |  对比结果  ${project.tenderComparison.results.length} 份`,
+    `投标文件清单  ${project.bidFileChecklist.length} 项`,
+    ...project.tenderComparison.results.flatMap((result) => result.differences.slice(0, 4).map((difference) => `${difference.title}：${difference.presales || "未提供"} -> ${difference.tender || "未提供"}`)),
+  ].join("\n\n");
+  slide.addText(tenderText, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 14, color: "24302D", breakLine: false, valign: "top", margin: 0 });
+
+  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "04 / REQUIREMENTS", "已审阅的需求与响应");
   const reviewed = project.requirements.filter((item) => item.reviewState !== "draft").slice(0, 8);
   const tableRows: PptxGenJS.TableRow[] = [["要求", "状态", "偏离", "责任人"], ...reviewed.map((item) => [item.title, responseLabels.zh[item.responseStatus], deviationLabels.zh[item.deviationType], item.owner || "待定"])] as PptxGenJS.TableRow[];
   slide.addTable(tableRows, { x: 0.7, y: 2, w: 12, h: 3.8, border: { type: "solid", color: "CBD2CF", pt: 1 }, fill: { color: "FFFFFF" }, color: "24302D", fontSize: 11, rowH: 0.42, margin: 0.08, bold: false });
 
-  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "04 / SOLUTION", "技术方案章节与证据");
+  slide = pptx.addSlide(); slide.background = { color: "FFFFFF" }; addTitle(slide, "05 / SOLUTION", "技术方案章节与证据");
   const sectionText = project.sections.map((item, index) => `${String(index + 1).padStart(2, "0")}  ${item.title}\n${item.purpose || item.body || "待编制"}`).join("\n\n") || "方案章节待编制。";
   slide.addText(sectionText, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 14, color: "24302D", breakLine: false, valign: "top", margin: 0 });
 
-  slide = pptx.addSlide(); slide.background = { color: "F4F6F2" }; addTitle(slide, "05 / NEXT ACTION", "会后执行与技术交底");
+  slide = pptx.addSlide(); slide.background = { color: "F4F6F2" }; addTitle(slide, "06 / NEXT ACTION", "会后执行与技术交底");
   const actions = project.actions.filter((item) => item.status !== "done").slice(0, 8).map((item) => `• ${item.title}  |  ${item.owner || "责任人待定"}  |  ${item.dueDate || "日期待定"}`).join("\n\n") || "暂无未完成事项。";
   slide.addText(actions, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 15, color: "24302D", breakLine: false, valign: "top", margin: 0 });
 

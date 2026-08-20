@@ -8,6 +8,7 @@ import {
   type Requirement,
 } from "./workspace-schema";
 import { getActionResponseTarget, templateFileFormat } from "./presales-generation";
+import { tenderTemplateFileFormat } from "./tender-generation";
 
 export type ValidationIssue = {
   id: string;
@@ -106,6 +107,22 @@ export function validateProject(project: ProjectManifest, locale: Locale = proje
       if (configured && !target.format) issues.push({ id: `${action.id}-response-format`, severity: "warning", area: "action", targetId: action.id, message: zh ? `“${round.title}”中的“${label}”未选择文件格式。` : `"${label}" in "${round.title}" has no file format.` });
     }
   }
+  if (project.tenderSourceIds.length && !project.selectedTenderSourceIds.length) {
+    issues.push({ id: "tender-source-selection", severity: "warning", area: "source", message: zh ? "已导入招标文件，但没有选择待分析文件。" : "Tender files were imported, but none are selected for analysis." });
+  }
+  for (const sourceId of [...project.selectedTenderSourceIds, ...project.tenderClarificationRounds.flatMap((round) => round.selectedSourceIds)]) {
+    const source = project.sources.find((item) => item.id === sourceId);
+    if (source && source.preprocessStatus !== "ready") {
+      issues.push({ id: `${source.id}-preprocess`, severity: "warning", area: "source", targetId: source.id, message: zh ? `文件“${source.name}”尚未完成预处理，不能进入招标分析。` : `File "${source.name}" is not preprocessed and cannot be included in tender analysis.` });
+    }
+  }
+  for (const [kind, config] of [["analysis", project.tenderAnalysis], ["comparison", project.tenderComparison]] as const) {
+    if (!config.outputFormat) continue;
+    const mismatch = config.selectedTemplateSourceIds
+      .map((id) => project.sources.find((source) => source.id === id))
+      .find((source) => source && tenderTemplateFileFormat(source.name) !== config.outputFormat);
+    if (mismatch) issues.push({ id: `${kind}-${mismatch.id}-template-format`, severity: "warning", area: "source", targetId: mismatch.id, message: zh ? `模板“${mismatch.name}”与当前招标${kind === "analysis" ? "分析" : "对比"}输出格式不匹配。` : `Template "${mismatch.name}" does not match the current tender ${kind} output format.` });
+  }
   for (const section of project.sections) {
     if (section.reviewState === "approved" && section.requirementIds.length === 0) issues.push({ id: `${section.id}-requirement`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联招标要求。` : `Section "${section.title}" is approved but has no linked tender requirement.` });
     if (section.reviewState === "approved" && section.evidenceIds.length === 0) issues.push({ id: `${section.id}-evidence`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联证据。` : `Section "${section.title}" is approved but has no linked evidence.` });
@@ -126,15 +143,11 @@ export function inferProjectStage(project: ProjectManifest): ProjectStage {
     || project.deliverables.some((item) => item.stage === "delivery");
   if (hasDeliveryWork) return "delivery";
 
-  const presalesSourceIds = new Set([
-    ...project.enterpriseContext.sourceIds,
-    ...project.presalesRounds.flatMap((round) => [
-      ...round.requirementSourceIds,
-      ...round.referenceSourceIds,
-      ...round.generatedFiles.map((file) => file.sourceId),
-    ]),
-  ]);
-  const hasTenderWork = project.sources.some((source) => !presalesSourceIds.has(source.id))
+  const hasTenderWork = project.tenderSourceIds.length > 0
+    || project.tenderClarificationRounds.some((round) => round.sourceIds.length > 0)
+    || project.tenderAnalysis.results.length > 0
+    || project.tenderComparison.results.length > 0
+    || project.bidFileChecklist.length > 0
     || project.requirements.some((item) => item.baseline === "tender")
     || project.evidence.length > 0
     || project.sections.length > 0
@@ -331,8 +344,8 @@ export function createSampleProject(kind: "ai" | "robot" | "electromechanical" =
     acceptanceCriteria: text.acceptance,
   }, locale);
   project.sources = [
-    { id: "meeting-notes", name: text.meetingFile, fileType: "md", version: "1.0", size: 240, sha256: "sample-meeting-notes", importedAt: project.updatedAt, requiresOcr: false, segments: [{ id: "meeting-notes-line-1", locatorKind: "line", locator: text.meetingLine, text: text.meetingExcerpt }] },
-    { id: "tender-v1", name: text.tenderFile, fileType: "pdf", version: "1.0", size: 1024, sha256: "sample-tender-v1", importedAt: project.updatedAt, requiresOcr: false, segments: [{ id: "tender-v1-page-18", locatorKind: "page", locator: text.tenderLocator, text: tender.originalText }] },
+    { id: "meeting-notes", name: text.meetingFile, fileType: "md", version: "1.0", size: 240, sha256: "sample-meeting-notes", importedAt: project.updatedAt, requiresOcr: false, preprocessStatus: "ready", preprocessedAt: project.updatedAt, preprocessMessage: "", segments: [{ id: "meeting-notes-line-1", locatorKind: "line", locator: text.meetingLine, text: text.meetingExcerpt }] },
+    { id: "tender-v1", name: text.tenderFile, fileType: "pdf", version: "1.0", size: 1024, sha256: "sample-tender-v1", importedAt: project.updatedAt, requiresOcr: false, preprocessStatus: "ready", preprocessedAt: project.updatedAt, preprocessMessage: "", segments: [{ id: "tender-v1-page-18", locatorKind: "page", locator: text.tenderLocator, text: tender.originalText }] },
   ];
   project.requirements = [discovery, tender];
   project.evidence = [{ id: "evidence-log-manual", title: text.evidenceTitle, kind: "manual", fileName: "logging-manual.pdf", version: "3.2", verifiedAt: "2026-08-14", expiresAt: "2026-11-12", sourceRef: null, notes: text.evidenceNotes }];

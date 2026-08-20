@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { projectToDocx, projectToPptx, projectToXlsx } from "./exporters";
-import { parsePlainText, parseSourceFile, sha256 } from "./parsers";
+import { hasReadableSourceText, parsePlainText, parseSourceFile, sha256 } from "./parsers";
 import { createSampleProject } from "./workflow";
 
 function minimalPdf(text: string): ArrayBuffer {
@@ -57,6 +57,15 @@ describe("source parsers", () => {
     expect(result.requiresOcr).toBe(false);
     expect(result.segments[0].locator).toBe("第 1 页");
     expect(result.segments[0].text).toContain("traceability");
+  });
+
+  it("separates readable tender text from image sources that require OCR", async () => {
+    const text = await parseSourceFile(new File(["投标人应提交部署方案、验收方案和项目进度计划，并在投标文件中标明来源。"], "tender.txt", { type: "text/plain" }));
+    const image = await parseSourceFile(new File([new Uint8Array([137, 80, 78, 71])], "scan.png", { type: "image/png" }));
+    expect(hasReadableSourceText(text)).toBe(true);
+    expect(image.requiresOcr).toBe(true);
+    expect(image.segments).toHaveLength(0);
+    expect(hasReadableSourceText(image)).toBe(false);
   });
 
   it("round-trips generated DOCX, XLSX, and PPTX into precise source locators", async () => {

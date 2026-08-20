@@ -16,19 +16,16 @@ test("runs the presales-to-handover project flow and persists edits", async ({ p
   await expect(projectName).toHaveValue("新建解决方案项目");
   await projectName.fill("端到端解决方案项目");
 
-  await page.getByRole("button", { name: /招标要求|Tender requirements/ }).click();
-  await page.locator('input[type="file"][accept*=".pdf"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The system shall retain audit logs.") });
-  await page.locator(".segment-list article button").first().click();
-  await expect(page.locator(".source-tabs button")).toHaveCount(1);
-  await expect(page.locator(".requirement-index button")).toHaveCount(1);
-  await expect(page.locator(".diff-list > div")).toHaveCount(1);
+  await page.getByRole("button", { name: /招标|Tender/ }).click();
+  await page.locator('#tender-files input[type="file"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The system shall retain audit logs and preserve source references for every response.") });
+  await expect(page.getByLabel("选择文件 tender.txt")).toBeChecked();
+  await page.getByRole("button", { name: "预处理", exact: true }).first().click();
+  await expect(page.getByText("上传并预处理完成", { exact: true })).toBeVisible();
 
   await page.getByRole("button", { name: /技术标组包|Technical bid pack/ }).click();
-  await expect(page.locator(".response-row")).toHaveCount(1);
+  await expect(page.locator(".response-row")).toHaveCount(0);
   await page.locator("section:has(.evidence-table) .icon-command").click();
   await expect(page.locator(".evidence-table .table-row")).toHaveCount(1);
-  await page.locator(".response-row select").first().selectOption("confirmed");
-  await page.locator(".evidence-checks input").first().check();
 
   await page.getByRole("button", { name: /中标交底|Award handover/ }).click();
   await expect(page.getByText(/技术交底与项目协同|Technical handover and project actions/)).toBeVisible();
@@ -79,9 +76,9 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
   await expect(stage).toHaveAttribute("data-stage", "presales");
   await expect(stage.locator("strong")).toHaveText("售前");
 
-  await page.getByRole("button", { name: "招标要求" }).click();
+  await page.getByRole("button", { name: "招标" }).click();
   await expect(stage).toHaveAttribute("data-stage", "presales");
-  await page.locator(".requirements-pane .pane-title .icon-command").click();
+  await page.locator('#tender-files input[type="file"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The bidder shall submit a deployment plan and acceptance plan.") });
   await expect(stage).toHaveAttribute("data-stage", "tender");
   await expect(stage.locator("strong")).toHaveText("投标");
 
@@ -90,6 +87,127 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
   await page.locator("section:has(.handover-grid) .icon-command").click();
   await expect(stage).toHaveAttribute("data-stage", "delivery");
   await expect(stage.locator("strong")).toHaveText("交底");
+});
+
+test("preprocesses selected tender files and keeps unrecognized files without OCR", async ({ page }) => {
+  await page.getByRole("button", { name: "招标" }).click();
+  await page.locator('#tender-files input[type="file"]').setInputFiles([
+    { name: "招标书.txt", mimeType: "text/plain", buffer: Buffer.from("投标人应提交技术方案、部署方案、验收方案和完整的项目进度计划。") },
+    { name: "扫描附件.png", mimeType: "image/png", buffer: Buffer.from([137, 80, 78, 71]) },
+  ]);
+  await expect(page.getByLabel("选择文件 招标书.txt")).toBeChecked();
+  await expect(page.getByLabel("选择文件 扫描附件.png")).toBeChecked();
+  await page.locator("#tender-files .tender-file-toolbar").getByRole("button", { name: "预处理" }).click();
+  const ocrChoice = page.getByRole("alertdialog");
+  await expect(ocrChoice.getByRole("heading")).toHaveText("导入文件存在无法识别项，是否通过 OCR 重新识别？");
+  await ocrChoice.getByRole("button", { name: "否" }).click();
+  await expect(page.getByText("上传并预处理完成", { exact: true })).toBeVisible();
+  await expect(page.getByText("仅上传，未处理", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: /招标书\.txt/ }).click();
+  await expect(page.locator(".tender-source-actions").getByRole("button", { name: "预处理" })).toBeDisabled();
+  await page.getByRole("button", { name: /扫描附件\.png/ }).click();
+  await page.locator(".tender-source-actions").getByRole("button", { name: "删除" }).click();
+  await expect(page.getByText("扫描附件.png", { exact: true })).toHaveCount(0);
+});
+
+test("restores every tender file after model configuration and completes OCR", async ({ page }) => {
+  await page.getByRole("button", { name: "招标" }).click();
+  await page.locator('#tender-files input[type="file"]').setInputFiles([
+    { name: "可读招标书.txt", mimeType: "text/plain", buffer: Buffer.from("本项目要求响应技术参数、交付计划、验收方案以及投标文件清单。") },
+    { name: "扫描补遗.png", mimeType: "image/png", buffer: Buffer.from([137, 80, 78, 71]) },
+  ]);
+  await page.locator("#tender-files .tender-file-toolbar").getByRole("button", { name: "预处理" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "是" }).click();
+  const modelChoice = page.getByRole("alertdialog");
+  await expect(modelChoice.getByRole("heading")).toHaveText("模型未配置，请前往配置。");
+  await modelChoice.getByRole("button", { name: "是，前往配置" }).click();
+  await expect(page).toHaveURL(/\/model-settings\?return=/);
+
+  await page.route("http://127.0.0.1:9020/v1/chat/completions", async (route) => {
+    const body = route.request().postDataJSON() as { messages: Array<{ content: unknown }> };
+    expect(JSON.stringify(body.messages[1].content)).toContain("data:image/png;base64");
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "补遗要求：交付周期调整为 60 天。" } }] }) });
+  });
+  await page.getByRole("button", { name: "本机或内网接口" }).click();
+  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9020/v1/chat/completions");
+  await page.getByLabel("模型名称").fill("vision-test-model");
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toBe("识别完成");
+    await dialog.accept();
+  });
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(page.getByText("可读招标书.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("扫描补遗.png", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /扫描补遗\.png 上传并预处理完成/ })).toBeVisible();
+  const persistedTenderNames = await page.evaluate(() => {
+    const stored = JSON.parse(localStorage.getItem("cavwic-solution-workspace") || "{}") as { tenderSourceIds?: string[]; sources?: Array<{ id: string; name: string }> };
+    return (stored.tenderSourceIds || []).map((id) => stored.sources?.find((source) => source.id === id)?.name || id);
+  });
+  expect(persistedTenderNames).toEqual(["可读招标书.txt", "扫描补遗.png"]);
+
+  await page.reload();
+  await expect(page.locator(".solution-app")).toHaveAttribute("data-ready", "true");
+  await page.getByRole("button", { name: "招标" }).click();
+  await expect(page.getByText("可读招标书.txt", { exact: true })).toBeVisible();
+  await expect(page.getByText("扫描补遗.png", { exact: true })).toBeVisible();
+});
+
+test("analyzes tender files, compares the full presales set, and builds the bid checklist", async ({ page }) => {
+  const presalesRound = page.locator(".presales-round").first();
+  await presalesRound.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "售前需求A.txt", mimeType: "text/plain", buffer: Buffer.from("售前阶段约定交付周期为 90 天，并要求提交部署方案。") });
+
+  await page.getByRole("link", { name: /模型配置/ }).click();
+  await page.getByRole("button", { name: "本机或内网接口" }).click();
+  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9021/v1/chat/completions");
+  await page.getByLabel("模型名称").fill("tender-analysis-model");
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await page.getByRole("link", { name: "返回工作台" }).click();
+  await page.getByRole("button", { name: "招标" }).click();
+
+  await page.locator('#tender-files input[type="file"]').setInputFiles({ name: "正式招标书.txt", mimeType: "text/plain", buffer: Buffer.from("投标截止时间为 2026 年 9 月 30 日，交付周期为 75 天，须提交技术方案和验收方案。") });
+  await page.locator("#tender-files .tender-file-toolbar").getByRole("button", { name: "预处理" }).click();
+  await page.getByRole("button", { name: "新增澄清节点" }).click();
+  const clarification = page.locator(".clarification-row").first();
+  await clarification.getByLabel("澄清节点名称").fill("第一次书面澄清");
+  await clarification.locator("label.file-command", { hasText: "导入澄清文件" }).locator("input[type=file]").setInputFiles({ name: "澄清回复.txt", mimeType: "text/plain", buffer: Buffer.from("交付周期最终调整为 60 天，以本澄清文件为准。") });
+  await expect(clarification.getByLabel("选择文件 澄清回复.txt")).toBeChecked();
+  await page.getByRole("button", { name: "技术参数", exact: true }).click();
+  await page.getByLabel("招标分析要求").fill("提取时间、参数、版本关系和投标文件清单，并标注来源。");
+  await page.getByLabel("招标分析文件格式").selectOption("md");
+
+  await page.route("http://127.0.0.1:9021/v1/chat/completions", async (route) => {
+    const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
+    const prompt = request.messages[1].content;
+    if (prompt.includes("售前与正式招标基线对比")) {
+      expect(prompt).toContain("售前需求A.txt");
+      expect(prompt).toContain("正式招标书.txt");
+      expect(prompt).toContain("澄清回复.txt");
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: `# 售前与招标差异\n\n交付周期发生变化。\n\n\`\`\`json\n${JSON.stringify({ schema: "cavwic-tender-analysis-1", requirements: [], bidFileChecklist: [], differences: [{ title: "交付周期", presales: "90 天", tender: "60 天", relation: "changed", notes: "以澄清回复为准" }] })}\n\`\`\`` } }] }) });
+    } else {
+      expect(prompt).toContain("正式招标书.txt");
+      expect(prompt).toContain("澄清回复.txt");
+      expect(prompt).not.toContain("售前需求A.txt");
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: `# 招标要求分析\n\n- 交付周期：60 天。\n\n\`\`\`json\n${JSON.stringify({ schema: "cavwic-tender-analysis-1", requirements: [{ title: "交付周期", category: "schedule", originalText: "交付周期最终调整为 60 天", normalizedText: "交付周期 60 天", sourceName: "澄清回复.txt", locator: "第 1 行", mandatory: true, scored: false, dueDate: "" }], bidFileChecklist: [{ title: "技术方案", category: "technical", notes: "正式招标书" }, { title: "验收方案", category: "delivery", notes: "正式招标书" }], differences: [] })}\n\`\`\`` } }] }) });
+    }
+  });
+
+  await page.getByRole("button", { name: "招标要求分析" }).click();
+  await expect(page.getByText("技术参数分析结果", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("投标文件名称").first()).toHaveValue("技术方案");
+  await expect(page.getByLabel("投标文件名称").nth(1)).toHaveValue("验收方案");
+  await page.getByLabel("招标分析要求").fill("临时修改的分析要求");
+  await page.getByRole("button", { name: "技术参数分析结果", exact: true }).click();
+  await expect(page.getByLabel("招标分析要求")).toHaveValue("提取时间、参数、版本关系和投标文件清单，并标注来源。");
+  await expect(page.getByRole("button", { name: /打开文件 · 技术参数分析结果\.md/ })).toBeVisible();
+
+  await page.getByLabel("全选售前文件").check();
+  await page.getByLabel("对比结果文件格式").selectOption("md");
+  await page.getByRole("button", { name: "对比", exact: true }).click();
+  await expect(page.getByText("售前与招标对比结果", { exact: true })).toBeVisible();
+  const difference = page.locator(".tender-difference-results .diff-list").first();
+  await expect(difference).toContainText("90 天");
+  await expect(difference).toContainText("60 天");
 });
 
 test("records communication participants by organization category", async ({ page }) => {
@@ -499,8 +617,8 @@ test("stores sources, Codex tasks, and generated files in the selected project f
     .some((path) => /客户项目\/presales-.+\.md$/.test(path))))
     .toBe(true);
 
-  await page.getByRole("button", { name: "招标要求" }).click();
-  await page.locator('input[type="file"][accept*=".pdf"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The system shall retain audit logs.") });
+  await page.getByRole("button", { name: "招标" }).click();
+  await page.locator('#tender-files input[type="file"]').setInputFiles({ name: "tender.txt", mimeType: "text/plain", buffer: Buffer.from("The system shall retain audit logs and provide an acceptance plan.") });
   await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
     .some((path) => /客户项目\/projects\/solution-\d{4}-\d{2}-\d{2}\/sources\/tender\.txt$/.test(path))))
     .toBe(true);
