@@ -333,6 +333,39 @@ textarea { padding: 11px; resize: vertical; }
 .bid-file-checklist > div { display: grid; min-height: 62px; grid-template-columns: 34px 150px minmax(180px, .8fr) minmax(220px, 1fr) 40px; gap: 8px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .bid-file-checklist input, .bid-file-checklist select { min-height: 42px; font-size: 14px; }
 
+.bid-output-list { border-top: 1px solid var(--ink); }
+.bid-output-list > article { border-bottom: 1px solid var(--ink); }
+.bid-output-summary { display: grid; width: 100%; min-height: 78px; grid-template-columns: 28px minmax(0, 1fr) auto 20px; gap: 13px; align-items: center; padding: 12px 8px; color: var(--ink); border: 0; background: transparent; cursor: pointer; text-align: left; }
+.bid-output-summary:hover { color: var(--teal); background: var(--surface-2); }
+.bid-output-summary > span:nth-of-type(1) { min-width: 0; }
+.bid-output-summary strong, .bid-output-summary small { display: block; overflow-wrap: anywhere; }
+.bid-output-summary strong { font-size: 17px; line-height: 1.35; }
+.bid-output-summary small { margin-top: 5px; color: var(--soft); font-size: 12px; line-height: 1.5; }
+.bid-output-summary > span:nth-of-type(2) { color: var(--soft); font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.bid-output-summary > svg:last-child { transition: transform .16s ease; }
+.bid-output-list > article.expanded .bid-output-summary > svg:last-child { transform: rotate(90deg); }
+.bid-output-editor { display: grid; gap: 20px; padding: 0 8px 28px 49px; }
+.bid-material-grid { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid var(--line-strong); border-bottom: 1px solid var(--line-strong); }
+.bid-material-grid > section { min-width: 0; padding: 16px 18px 20px 0; }
+.bid-material-grid > section + section { padding-right: 0; padding-left: 18px; border-left: 1px solid var(--line-strong); }
+.bid-editor-heading { display: flex; min-height: 42px; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.bid-editor-heading > strong { font-size: 14px; }
+.bid-material-empty { display: grid; min-height: 72px; place-items: center; color: var(--soft); border: 1px dashed var(--line); font-size: 13px; text-align: center; }
+.bid-select-all { min-height: 34px; margin-bottom: 4px; }
+.bid-output-fields { display: grid; grid-template-columns: minmax(180px, .3fr) minmax(0, 1fr); gap: 16px; }
+.bid-output-fields .wide { grid-column: 1 / -1; }
+.bid-output-fields textarea { min-height: 150px; line-height: 1.65; }
+.bid-generate-command { width: min(260px, 100%); }
+.bid-generated-list { display: grid; border-top: 1px solid var(--line-strong); }
+.bid-generated-list > strong { padding: 12px 4px 7px; font-size: 13px; }
+.bid-generated-list > div { display: grid; grid-template-columns: minmax(0, 1fr) 40px; align-items: center; border-bottom: 1px solid var(--line); }
+.bid-generated-list > div > button:first-child { display: grid; min-width: 0; min-height: 56px; grid-template-columns: 22px minmax(0, 1fr) 18px; gap: 9px; align-items: center; padding: 9px 4px; color: var(--ink); border: 0; background: transparent; cursor: pointer; text-align: left; }
+.bid-generated-list > div > button:first-child:hover { color: var(--teal); }
+.bid-generated-list span { min-width: 0; }
+.bid-generated-list strong, .bid-generated-list small { display: block; overflow-wrap: anywhere; }
+.bid-generated-list strong { font-size: 14px; }
+.bid-generated-list small { margin-top: 4px; color: var(--soft); font-family: var(--mono); font-size: 10px; line-height: 1.45; }
+
 .source-review-grid { display: grid; min-height: 760px; grid-template-columns: minmax(300px, .85fr) minmax(470px, 1.15fr); gap: 28px; }
 .source-pane, .requirements-pane { min-width: 0; }
 .segment-list { max-height: 670px; overflow-y: auto; border-top: 1px solid var(--ink); }
@@ -495,6 +528,9 @@ textarea { padding: 11px; resize: vertical; }
   .tender-analysis-grid { grid-template-columns: 1fr; }
   .tender-analysis-pane + .tender-analysis-pane { border-top: 1px solid var(--line-strong); border-left: 0; }
   .bid-file-checklist > div { grid-template-columns: 34px 140px minmax(160px, .8fr) minmax(180px, 1fr) 40px; }
+  .bid-material-grid { grid-template-columns: 1fr; }
+  .bid-material-grid > section { padding-right: 0; }
+  .bid-material-grid > section + section { padding-left: 0; border-top: 1px solid var(--line-strong); border-left: 0; }
   .source-pane { max-height: 560px; }
   .package-register { grid-template-columns: repeat(2, 1fr); }
   .format-grid { grid-template-columns: repeat(3, 1fr); }
@@ -537,6 +573,9 @@ textarea { padding: 11px; resize: vertical; }
   .clarification-files { border-top: 1px solid var(--line); border-left: 0; }
   .bid-file-checklist > div { grid-template-columns: 34px 130px minmax(0, 1fr) 40px; }
   .bid-file-checklist > div > input:last-of-type { grid-column: 2 / -1; grid-row: 2; }
+  .bid-output-editor { padding-left: 8px; }
+  .bid-output-fields { grid-template-columns: 1fr; }
+  .bid-output-fields .wide { grid-column: auto; }
   .diff-list > div { grid-template-columns: 78px 1fr; }.diff-list svg { display: none; }.diff-list p:last-child { grid-column: 2; }
   .handover-row { grid-template-columns: 88px 1fr; }.handover-row input:nth-of-type(2), .handover-row input[type="date"] { grid-column: 1 / -1; }
   .format-grid { grid-template-columns: 1fr 1fr; }
@@ -587,6 +626,11 @@ textarea { padding: 11px; resize: vertical; }
   .bid-file-checklist > div > select, .bid-file-checklist > div > input { grid-column: 2 / -1; }
   .bid-file-checklist > div > input:last-of-type { grid-row: auto; }
   .bid-file-checklist > div > .row-delete { grid-column: 3; grid-row: 1; }
+  .bid-output-summary { grid-template-columns: 24px minmax(0, 1fr) 18px; gap: 8px; padding-inline: 2px; }
+  .bid-output-summary > span:nth-of-type(2) { grid-column: 2; }
+  .bid-output-summary > svg:last-child { grid-column: 3; grid-row: 1; }
+  .bid-output-editor { padding-inline: 2px; }
+  .bid-editor-heading { align-items: flex-start; flex-direction: column; }
 }
 
 @media print {

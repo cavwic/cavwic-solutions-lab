@@ -22,10 +22,9 @@ test("runs the presales-to-handover project flow and persists edits", async ({ p
   await page.getByRole("button", { name: "预处理", exact: true }).first().click();
   await expect(page.getByText("上传并预处理完成", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: /技术标组包|Technical bid pack/ }).click();
-  await expect(page.locator(".response-row")).toHaveCount(0);
-  await page.locator("section:has(.evidence-table) .icon-command").click();
-  await expect(page.locator(".evidence-table .table-row")).toHaveCount(1);
+  await page.getByRole("button", { name: /投标|Bid/ }).click();
+  await expect(page.getByRole("heading", { name: /投标文件输出|Bid file output/ })).toBeVisible();
+  await expect(page.locator(".bid-output-list > article")).toHaveCount(0);
 
   await page.getByRole("button", { name: /中标交底|Award handover/ }).click();
   await expect(page.getByText(/技术交底与项目协同|Technical handover and project actions/)).toBeVisible();
@@ -179,7 +178,13 @@ test("analyzes tender files, compares the full presales set, and builds the bid 
   await page.route("http://127.0.0.1:9021/v1/chat/completions", async (route) => {
     const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
     const prompt = request.messages[1].content;
-    if (prompt.includes("售前与正式招标基线对比")) {
+    if (prompt.includes("技术投标文件编制负责人")) {
+      expect(prompt).toContain("产品能力参考.txt");
+      expect(prompt).toContain("企业技术方案模板.md");
+      expect(prompt).toContain("重点说明权限边界、实施步骤和验收方法");
+      expect(prompt).toContain("交付周期 60 天");
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 技术方案\n\n## 项目理解\n\n交付周期为 60 天。\n\n## 待确认事项\n\n具体产品参数待确认。" } }] }) });
+    } else if (prompt.includes("售前与正式招标基线对比")) {
       expect(prompt).toContain("售前需求A.txt");
       expect(prompt).toContain("正式招标书.txt");
       expect(prompt).toContain("澄清回复.txt");
@@ -208,6 +213,53 @@ test("analyzes tender files, compares the full presales set, and builds the bid 
   const difference = page.locator(".tender-difference-results .diff-list").first();
   await expect(difference).toContainText("90 天");
   await expect(difference).toContainText("60 天");
+
+  await page.getByRole("button", { name: "投标", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "投标文件输出" })).toBeVisible();
+  await expect(page.locator(".bid-output-list > article")).toHaveCount(2);
+  const technicalFile = page.locator(".bid-output-list > article").filter({ hasText: "技术方案" }).first();
+  await technicalFile.locator(".bid-output-summary").click();
+  await technicalFile.locator("label.file-command", { hasText: "上传模板" }).locator("input[type=file]").setInputFiles({ name: "企业技术方案模板.md", mimeType: "text/markdown", buffer: Buffer.from("# 项目理解\n# 技术方案\n# 实施与验收") });
+  await technicalFile.locator("label.file-command", { hasText: "上传参考资料" }).locator("input[type=file]").setInputFiles({ name: "产品能力参考.txt", mimeType: "text/plain", buffer: Buffer.from("系统支持分级权限、操作审计和分阶段验收。") });
+  await technicalFile.getByLabel("输出格式 技术方案").selectOption("md");
+  await technicalFile.getByLabel("细节要求 技术方案").fill("重点说明权限边界、实施步骤和验收方法。");
+  await technicalFile.getByRole("button", { name: "生成文件" }).click();
+  await expect(technicalFile.getByText("技术方案.md", { exact: true })).toBeVisible();
+
+  await page.reload();
+  await page.getByRole("button", { name: "投标", exact: true }).click();
+  const persistedTechnicalFile = page.locator(".bid-output-list > article").filter({ hasText: "技术方案" }).first();
+  await persistedTechnicalFile.locator(".bid-output-summary").click();
+  await expect(persistedTechnicalFile.getByLabel("细节要求 技术方案")).toHaveValue("重点说明权限边界、实施步骤和验收方法。");
+  await expect(persistedTechnicalFile.getByText("技术方案.md", { exact: true })).toBeVisible();
+
+  await page.evaluate(() => {
+    localStorage.removeItem("cavwic-lab-model-settings");
+    const writes: Array<{ name: string; content: string }> = [];
+    class TaskDirectory {
+      name = "投标任务";
+      async queryPermission() { return "granted" as PermissionState; }
+      async requestPermission() { return "granted" as PermissionState; }
+      async getFileHandle(name: string) {
+        return { async createWritable() { return { async write(content: string) { writes.push({ name, content: String(content) }); }, async close() {} }; } };
+      }
+    }
+    (window as typeof window & { __bidTaskWrites?: Array<{ name: string; content: string }> }).__bidTaskWrites = writes;
+    window.showDirectoryPicker = async () => new TaskDirectory() as never;
+  });
+  const acceptanceFile = page.locator(".bid-output-list > article").filter({ hasText: "验收方案" }).first();
+  await acceptanceFile.locator(".bid-output-summary").click();
+  await acceptanceFile.getByLabel("输出格式 验收方案").selectOption("docx");
+  await acceptanceFile.getByLabel("细节要求 验收方案").fill("覆盖工厂验收、现场验收和遗留项关闭。");
+  await acceptanceFile.getByRole("button", { name: "生成文件" }).click();
+  await expect(page.getByRole("alertdialog").getByRole("button")).toHaveText(["是，前往配置", "否，输出任务"]);
+  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __bidTaskWrites?: Array<{ name: string; content: string }> }).__bidTaskWrites || [])).toHaveLength(1);
+  const [task] = await page.evaluate(() => (window as typeof window & { __bidTaskWrites?: Array<{ name: string; content: string }> }).__bidTaskWrites || []);
+  expect(task.name).toMatch(/^bid-output-.+\.md$/);
+  expect(task.content).toContain("验收方案.docx");
+  expect(task.content).toContain("覆盖工厂验收、现场验收和遗留项关闭");
+  expect(task.content).toContain("generatedFiles");
 });
 
 test("records communication participants by organization category", async ({ page }) => {

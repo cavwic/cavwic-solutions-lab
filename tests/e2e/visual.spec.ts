@@ -29,9 +29,9 @@ test("theme and language controls preserve a dense responsive layout", async ({ 
 
   await page.getByRole("button", { name: "切换到深色模式" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.getByRole("button", { name: "技术标组包" }).click();
-  await expect(page.getByText("文件包登记")).toBeVisible();
-  await expect(page.getByText("技术方案", { exact: true }).last()).toBeVisible();
+  await page.getByRole("button", { name: "投标", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "投标文件输出" })).toBeVisible();
+  await expect(page.getByText("招标要求分析生成投标文件清单后，文件会同步显示在这里。")).toBeVisible();
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("bid-package-dark-zh.png"), fullPage: true });
   await page.getByRole("button", { name: "招标" }).click();
@@ -67,6 +67,40 @@ test("tender preprocessing and clarification workspace stays readable", async ({
   await page.getByLabel("招标分析文件格式").selectOption("md");
   await expectNoHorizontalOverflow(page);
   await page.screenshot({ path: testInfo.outputPath("tender-workspace-zh.png"), fullPage: true });
+});
+
+test("bid file output editor remains readable and switches language immediately", async ({ page }, testInfo) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    localStorage.clear();
+    localStorage.setItem("cavwic-lab-locale", "zh");
+  });
+  await page.reload();
+  await expect(page.locator(".solution-app")).toHaveAttribute("data-ready", "true");
+  await page.evaluate(() => {
+    const stored = localStorage.getItem("cavwic-solution-workspace");
+    if (!stored) throw new Error("PROJECT_NOT_STORED");
+    const project = JSON.parse(stored) as { bidFileChecklist: unknown[] };
+    project.bidFileChecklist = [
+      { id: "visual-technical", title: "技术方案及实施计划", category: "technical", status: "pending", sourceResultId: "analysis-visual", notes: "来自招标文件第三章与澄清文件" },
+      { id: "visual-acceptance", title: "工厂及现场验收方案", category: "delivery", status: "pending", sourceResultId: "analysis-visual", notes: "覆盖 FAT、SAT 与遗留项关闭" },
+    ];
+    localStorage.setItem("cavwic-solution-workspace", JSON.stringify(project));
+  });
+  await page.reload();
+  await page.getByRole("button", { name: "投标", exact: true }).click();
+  const item = page.locator(".bid-output-list > article").first();
+  await item.locator(".bid-output-summary").click();
+  await item.getByLabel("输出格式 技术方案及实施计划").selectOption("docx");
+  await item.getByLabel("细节要求 技术方案及实施计划").fill("按招标章节顺序说明总体架构、实施步骤、项目边界、验收方法和待确认事项。");
+  await expectNoHorizontalOverflow(page);
+  await page.screenshot({ path: testInfo.outputPath("bid-output-editor-zh.png"), fullPage: true });
+
+  await page.getByRole("button", { name: "Switch to English" }).click();
+  await expect(page.getByRole("heading", { name: "Bid file output" })).toBeVisible();
+  await expect(item.getByText("File template", { exact: true })).toBeVisible();
+  await expect(item.getByRole("button", { name: "Generate file" })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
 });
 
 test("presales communication workspace remains readable", async ({ page }, testInfo) => {

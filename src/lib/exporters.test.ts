@@ -9,7 +9,7 @@ describe("project exporters", () => {
     project.tenderSourceIds = ["tender-v1"];
     project.selectedTenderSourceIds = ["tender-v1"];
     project.tenderComparison.results = [{ id: "comparison-1", kind: "comparison", name: "售前与招标对比结果", fileName: "comparison.md", format: "md", createdAt: "2026-08-20", provider: "local", model: "test", sourceId: "comparison-source", relativePath: "outputs/comparison.md", prompt: "", keywords: [], sourceIds: ["meeting-notes", "tender-v1"], templateSourceIds: [], differences: [{ title: "交付周期", presales: "90 天", tender: "60 天", relation: "changed", notes: "以澄清为准" }] }];
-    project.bidFileChecklist = [{ id: "bid-file-1", title: "技术方案", category: "technical", status: "pending", sourceResultId: "comparison-1", notes: "招标文件要求" }];
+    project.bidFileChecklist = [{ id: "bid-file-1", title: "技术方案", category: "technical", status: "pending", sourceResultId: "comparison-1", notes: "招标文件要求", templateSourceIds: [], selectedTemplateSourceIds: [], referenceSourceIds: [], selectedReferenceSourceIds: [], detailRequirements: "", generatedFiles: [] }];
     const markdown = projectToMarkdown(project);
     expect(markdown).toContain("招标要求响应表");
     expect(markdown).toContain("第 18 页");

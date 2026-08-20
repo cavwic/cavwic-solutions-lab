@@ -277,6 +277,20 @@ export const tenderComparisonConfigSchema = z.object({
   results: z.array(tenderAnalysisResultSchema).default([]),
 });
 
+export const bidGeneratedFileSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  format: tenderOutputFormatSchema,
+  createdAt: z.string(),
+  provider: z.enum(["local", "cloud", "codex"]),
+  model: z.string(),
+  sourceId: z.string(),
+  relativePath: z.string(),
+  referenceSourceIds: z.array(z.string()).default([]),
+  templateSourceIds: z.array(z.string()).default([]),
+  detailRequirements: z.string().default(""),
+});
+
 export const bidFileChecklistItemSchema = z.object({
   id: z.string().min(1),
   title: z.string().min(1),
@@ -284,6 +298,13 @@ export const bidFileChecklistItemSchema = z.object({
   status: z.enum(["pending", "confirmed"]).default("pending"),
   sourceResultId: z.string().default(""),
   notes: z.string().default(""),
+  templateSourceIds: z.array(z.string()).default([]),
+  selectedTemplateSourceIds: z.array(z.string()).default([]),
+  referenceSourceIds: z.array(z.string()).default([]),
+  selectedReferenceSourceIds: z.array(z.string()).default([]),
+  outputFormat: tenderOutputFormatSchema.optional(),
+  detailRequirements: z.string().default(""),
+  generatedFiles: z.array(bidGeneratedFileSchema).default([]),
 });
 
 export const projectManifestSchema = z.object({
@@ -360,6 +381,7 @@ export type TenderClarificationRound = z.infer<typeof tenderClarificationRoundSc
 export type TenderAnalysisResult = z.infer<typeof tenderAnalysisResultSchema>;
 export type TenderAnalysisConfig = z.infer<typeof tenderAnalysisConfigSchema>;
 export type TenderComparisonConfig = z.infer<typeof tenderComparisonConfigSchema>;
+export type BidGeneratedFile = z.infer<typeof bidGeneratedFileSchema>;
 export type BidFileChecklistItem = z.infer<typeof bidFileChecklistItemSchema>;
 export type ProjectManifest = z.infer<typeof projectManifestSchema>;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;

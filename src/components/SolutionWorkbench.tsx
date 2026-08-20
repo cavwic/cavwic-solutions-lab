@@ -35,6 +35,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  buildBidFilePrompt,
+  buildCodexBidFileTask,
+} from "../lib/bid-generation";
+import {
   buildProjectArchive,
   downloadBlob,
   presentationMarkdown,
@@ -115,8 +119,6 @@ import {
   createId,
   createPresalesRound,
   projectManifestSchema,
-  type Deliverable,
-  type EvidenceRef,
   type Locale,
   type PresalesGeneratedFile,
   type PresalesAnalysisResult,
@@ -124,10 +126,10 @@ import {
   type PresalesRound,
   type PresalesRoundAction,
   type ProjectManifest,
-  type Requirement,
   type BidFileChecklistItem,
   type SourceDocument,
   type TenderAnalysisResult,
+  type BidGeneratedFile,
   type TenderOutputFormat,
 } from "../lib/workspace-schema";
 
@@ -139,7 +141,8 @@ type PendingModelAction =
   | { kind: "response-files"; roundId: string; actionIds: string[]; anchorId: string }
   | { kind: "tender-ocr"; sourceIds: string[]; anchorId: string }
   | { kind: "tender-analysis"; anchorId: string }
-  | { kind: "tender-comparison"; anchorId: string };
+  | { kind: "tender-comparison"; anchorId: string }
+  | { kind: "bid-output"; bidFileId: string; anchorId: string };
 
 const copy = {
   zh: {
@@ -148,7 +151,7 @@ const copy = {
     projectContext: "项目与边界",
     presales: "售前准备",
     requirements: "招标",
-    bid: "技术标组包",
+    bid: "投标",
     handover: "中标交底",
     outputs: "输出与 Skills",
     reset: "新建项目",
@@ -171,10 +174,6 @@ const copy = {
     addRequirement: "加入要求",
     requirementReview: "要求复核队列",
     baselineDiff: "售前与招标差异",
-    evidenceLibrary: "产品与方案证据库",
-    responseMatrix: "响应与偏离表",
-    solutionSections: "技术方案章节",
-    deliverables: "技术标文件包",
     commitments: "承诺基线",
     handoverList: "技术交底与项目协同",
     audit: "发布前检查",
@@ -209,10 +208,6 @@ const copy = {
     sourceOnlyEyebrow: "来源",
     reviewEyebrow: "复核队列",
     baselineEyebrow: "基线 / 变更",
-    materialsEyebrow: "已核验资料",
-    complianceEyebrow: "响应 / 偏离",
-    technicalEyebrow: "技术方案",
-    packageEyebrow: "文件包登记",
     commitmentEyebrow: "承诺基线",
     handoverEyebrow: "交底 / 交付",
     localWorkspaceEyebrow: "本地工作区",
@@ -231,7 +226,7 @@ const copy = {
     projectContext: "Project and boundary",
     presales: "Presales",
     requirements: "Tender",
-    bid: "Technical bid pack",
+    bid: "Bid",
     handover: "Award handover",
     outputs: "Outputs and Skills",
     reset: "New project",
@@ -254,10 +249,6 @@ const copy = {
     addRequirement: "Add requirement",
     requirementReview: "Requirement review queue",
     baselineDiff: "Presales and tender differences",
-    evidenceLibrary: "Product and solution evidence",
-    responseMatrix: "Response and deviation matrix",
-    solutionSections: "Technical solution sections",
-    deliverables: "Technical bid deliverables",
     commitments: "Commitment baseline",
     handoverList: "Technical handover and project actions",
     audit: "Pre-release checks",
@@ -292,10 +283,6 @@ const copy = {
     sourceOnlyEyebrow: "SOURCE",
     reviewEyebrow: "REVIEW QUEUE",
     baselineEyebrow: "BASELINE / CHANGE",
-    materialsEyebrow: "VERIFIED MATERIALS",
-    complianceEyebrow: "COMPLIANCE / DEVIATION",
-    technicalEyebrow: "TECHNICAL VOLUME",
-    packageEyebrow: "PACKAGE REGISTER",
     commitmentEyebrow: "COMMITMENT BASELINE",
     handoverEyebrow: "HANDOVER / DELIVERY",
     localWorkspaceEyebrow: "LOCAL WORKSPACE",
@@ -322,25 +309,9 @@ const responseLabels = {
   zh: { confirmed: "已证实满足", conditional: "条件满足", custom: "需定制", missing_evidence: "缺少证据", unsupported: "不满足" },
   en: { confirmed: "Confirmed", conditional: "Conditional", custom: "Customization required", missing_evidence: "Evidence missing", unsupported: "Unsupported" },
 } as const;
-const deviationLabels = {
-  zh: { positive: "正偏离", none: "无偏离", negative: "负偏离", pending: "待确认" },
-  en: { positive: "Positive", none: "None", negative: "Negative", pending: "Pending" },
-} as const;
-const reviewLabels = {
-  zh: { draft: "草稿", reviewed: "已复核", approved: "已批准" },
-  en: { draft: "Draft", reviewed: "Reviewed", approved: "Approved" },
-} as const;
 const actionStatusLabels = {
   zh: { open: "待处理", working: "进行中", blocked: "受阻", done: "已完成" },
   en: { open: "Open", working: "Working", blocked: "Blocked", done: "Done" },
-} as const;
-const deliverableStatusLabels = {
-  zh: { "not-started": "未开始", draft: "草稿", review: "审阅中", approved: "已批准" },
-  en: { "not-started": "Not started", draft: "Draft", review: "In review", approved: "Approved" },
-} as const;
-const evidenceKindLabels = {
-  zh: { "product-intro": "产品介绍", sow: "工作范围 SOW", manual: "产品手册", "historical-solution": "历史方案", certificate: "证书", drawing: "图纸", other: "其他" },
-  en: { "product-intro": "Product introduction", sow: "SOW", manual: "Manual", "historical-solution": "Historical solution", certificate: "Certificate", drawing: "Drawing", other: "Other" },
 } as const;
 const projectStageLabels = {
   zh: { presales: "售前", tender: "投标", delivery: "交底" },
@@ -349,10 +320,6 @@ const projectStageLabels = {
 const diffRelationLabels = {
   zh: { added: "新增", changed: "已修改", unchanged: "未变化", removed: "已删除", conflict: "有冲突" },
   en: { added: "Added", changed: "Changed", unchanged: "Unchanged", removed: "Removed", conflict: "Conflict" },
-} as const;
-const deliverableKindLabels = {
-  zh: { "technical-proposal": "技术方案", "response-matrix": "响应表", "deviation-table": "偏离表", "module-detail": "模块分项介绍", "drawing-register": "图纸清单", "deployment-manual": "部署手册", "acceptance-plan": "验收方案", "certificate-register": "证书清单" },
-  en: { "technical-proposal": "Technical proposal", "response-matrix": "Response matrix", "deviation-table": "Deviation table", "module-detail": "Module details", "drawing-register": "Drawing register", "deployment-manual": "Deployment manual", "acceptance-plan": "Acceptance plan", "certificate-register": "Certificate register" },
 } as const;
 const issueAreaLabels = {
   zh: { project: "项目", source: "来源", requirement: "要求", evidence: "证据", action: "任务", deliverable: "交付物", section: "章节" },
@@ -399,6 +366,9 @@ function sourceIsReferenced(project: ProjectManifest, sourceId: string): boolean
     || project.tenderComparison.selectedPresalesSourceIds.includes(sourceId)
     || project.tenderComparison.templateSourceIds.includes(sourceId)
     || project.tenderComparison.results.some((result) => result.sourceId === sourceId || result.sourceIds.includes(sourceId) || result.templateSourceIds.includes(sourceId))
+    || project.bidFileChecklist.some((item) => item.templateSourceIds.includes(sourceId)
+      || item.referenceSourceIds.includes(sourceId)
+      || item.generatedFiles.some((file) => file.sourceId === sourceId || file.referenceSourceIds.includes(sourceId) || file.templateSourceIds.includes(sourceId)))
     || project.requirements.some((item) => item.sourceRef?.documentId === sourceId)
     || project.evidence.some((item) => item.sourceRef?.documentId === sourceId)
     || project.presalesRounds.some((round) => round.requirementSourceIds.includes(sourceId)
@@ -439,6 +409,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [expandedAnalysisId, setExpandedAnalysisId] = useState("");
   const [expandedTenderSourceId, setExpandedTenderSourceId] = useState("");
   const [expandedTenderResultId, setExpandedTenderResultId] = useState("");
+  const [expandedBidFileId, setExpandedBidFileId] = useState("");
   const [tenderKeywordDraft, setTenderKeywordDraft] = useState("");
   const [ocrChoiceSourceIds, setOcrChoiceSourceIds] = useState<string[] | null>(null);
   const [ocrProgress, setOcrProgress] = useState<Record<string, number>>({});
@@ -499,6 +470,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         if (pendingReturn.action === "tender-ocr") setResumeModelAction({ kind: "tender-ocr", sourceIds: pendingReturn.targetIds, anchorId: pendingReturn.anchorId });
         else if (pendingReturn.action === "tender-analysis") setResumeModelAction({ kind: "tender-analysis", anchorId: pendingReturn.anchorId });
         else if (pendingReturn.action === "tender-comparison") setResumeModelAction({ kind: "tender-comparison", anchorId: pendingReturn.anchorId });
+        else if (pendingReturn.action === "bid-output" && pendingReturn.targetIds[0]) {
+          setExpandedBidFileId(pendingReturn.targetIds[0]);
+          setResumeModelAction({ kind: "bid-output", bidFileId: pendingReturn.targetIds[0], anchorId: pendingReturn.anchorId });
+        }
       }
       setFilesHydrated(true);
       setReady(true);
@@ -567,8 +542,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     persistProjectSnapshot(nextProject);
     return nextProject;
   });
-  const updateRequirement = (id: string, patch: Partial<Requirement>) => updateProject("requirements", project.requirements.map((item) => item.id === id ? { ...item, ...patch } : item));
   const updatePresalesRound = (id: string, patch: Partial<PresalesRound>) => updateProject("presalesRounds", project.presalesRounds.map((item) => item.id === id ? { ...item, ...patch } : item));
+  const updateBidFile = (id: string, patch: Partial<BidFileChecklistItem>) => updateProject("bidFileChecklist", project.bidFileChecklist.map((item) => item.id === id ? { ...item, ...patch } : item));
 
   const switchLocale = () => {
     const next = locale === "zh" ? "en" : "zh";
@@ -1167,7 +1142,20 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const nextFiles = new Map(sourceFiles).set(source.id, generatedFile);
       const existingNormalized = new Set(project.requirements.filter((item) => item.baseline === "tender").map((item) => item.normalizedText.trim()));
       const extractedRequirements = kind === "analysis" ? createTenderRequirements(extracted.data, [...inputs.tenderSources, ...inputs.clarificationSources]).filter((item) => !existingNormalized.has(item.normalizedText.trim())) : [];
-      const checklist: BidFileChecklistItem[] = kind === "analysis" ? extracted.data.bidFileChecklist.map((item) => ({ id: createId("bid-file"), title: item.title, category: item.category, status: "pending", sourceResultId: record.id, notes: item.notes })) : [];
+      const checklist: BidFileChecklistItem[] = kind === "analysis" ? extracted.data.bidFileChecklist.map((item) => ({
+        id: createId("bid-file"),
+        title: item.title,
+        category: item.category,
+        status: "pending",
+        sourceResultId: record.id,
+        notes: item.notes,
+        templateSourceIds: [],
+        selectedTemplateSourceIds: [],
+        referenceSourceIds: [],
+        selectedReferenceSourceIds: [],
+        detailRequirements: "",
+        generatedFiles: [],
+      })) : [];
       const knownChecklist = new Set(project.bidFileChecklist.map((item) => item.title.trim()));
       const nextProject = syncProjectStage({
         ...project,
@@ -1260,7 +1248,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       selectedRequirementId,
       selectedActionIds: [...selectedActionIds],
       expandedAnalysisId,
-      targetIds: pending.kind === "tender-ocr" ? pending.sourceIds : pending.kind === "response-files" ? pending.actionIds : [],
+      targetIds: pending.kind === "tender-ocr" ? pending.sourceIds : pending.kind === "response-files" ? pending.actionIds : pending.kind === "bid-output" ? [pending.bidFileId] : [],
       taskKind,
       savedAt: new Date().toISOString(),
     });
@@ -1490,6 +1478,246 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setPendingModelAction({ kind: "response-files", roundId: round.id, actionIds: actions.map((action) => action.id), anchorId });
   };
 
+  const alertBidTemplateMismatch = (sourceName: string, format: TenderOutputFormat) => {
+    const target = format === "docx" ? "Word" : format === "pptx" ? "PPT" : format === "xlsx" ? "Excel" : "Markdown";
+    window.alert(locale === "zh"
+      ? `模板“${sourceName}”与 ${target} 输出格式不匹配，请更换模板或输出格式。`
+      : `Template “${sourceName}” does not match the ${target} output format. Choose another template or output format.`);
+  };
+
+  const importBidFiles = async (item: BidFileChecklistItem, files: FileList | null, kind: "template" | "reference") => {
+    if (!files?.length) return;
+    setBusy(true);
+    setNotice(`${t.parsing}…`);
+    try {
+      const parsed: SourceDocument[] = [];
+      const nextFiles = new Map(sourceFiles);
+      for (const file of Array.from(files)) {
+        const rawSource = await parseSourceFile(file);
+        const source: SourceDocument = hasReadableSourceText(rawSource) ? {
+          ...rawSource,
+          preprocessStatus: "ready",
+          preprocessedAt: new Date().toISOString(),
+          preprocessMessage: locale === "zh" ? "上传并预处理完成" : "Uploaded and preprocessed",
+        } : rawSource;
+        parsed.push(source);
+        nextFiles.set(source.id, file);
+      }
+      const sourceIds = parsed.map((source) => source.id);
+      const mismatched = kind === "template" && item.outputFormat
+        ? parsed.filter((source) => tenderTemplateFileFormat(source.name) !== item.outputFormat)
+        : [];
+      const selectableIds = sourceIds.filter((id) => !mismatched.some((source) => source.id === id));
+      const nextItem: BidFileChecklistItem = kind === "template" ? {
+        ...item,
+        templateSourceIds: [...new Set([...item.templateSourceIds, ...sourceIds])],
+        selectedTemplateSourceIds: [...new Set([...item.selectedTemplateSourceIds, ...selectableIds])],
+      } : {
+        ...item,
+        referenceSourceIds: [...new Set([...item.referenceSourceIds, ...sourceIds])],
+        selectedReferenceSourceIds: [...new Set([...item.selectedReferenceSourceIds, ...sourceIds])],
+      };
+      const nextProject = syncProjectStage({
+        ...project,
+        sources: [...project.sources, ...parsed],
+        bidFileChecklist: project.bidFileChecklist.map((candidate) => candidate.id === item.id ? nextItem : candidate),
+        updatedAt: new Date().toISOString(),
+      });
+      commitProject(nextProject);
+      setSourceFiles(nextFiles);
+      await persistSourceFiles(project.id, new Map(parsed.map((source) => [source.id, nextFiles.get(source.id) as File]))).catch(() => undefined);
+      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
+      if (mismatched[0] && item.outputFormat) alertBidTemplateMismatch(mismatched[0].name, item.outputFormat);
+      setNotice(locale === "zh" ? `${parsed.length} 个文件已导入。` : `${parsed.length} file(s) imported.`);
+    } catch {
+      setNotice(locale === "zh" ? "文件导入失败，请检查文件格式。" : "Import failed. Check the file format.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeBidSource = async (item: BidFileChecklistItem, sourceId: string, kind: "template" | "reference") => {
+    const nextItem: BidFileChecklistItem = kind === "template" ? {
+      ...item,
+      templateSourceIds: item.templateSourceIds.filter((id) => id !== sourceId),
+      selectedTemplateSourceIds: item.selectedTemplateSourceIds.filter((id) => id !== sourceId),
+    } : {
+      ...item,
+      referenceSourceIds: item.referenceSourceIds.filter((id) => id !== sourceId),
+      selectedReferenceSourceIds: item.selectedReferenceSourceIds.filter((id) => id !== sourceId),
+    };
+    const detached = syncProjectStage({
+      ...project,
+      bidFileChecklist: project.bidFileChecklist.map((candidate) => candidate.id === item.id ? nextItem : candidate),
+      updatedAt: new Date().toISOString(),
+    });
+    const removeSource = !sourceIsReferenced(detached, sourceId);
+    const nextProject = removeSource ? { ...detached, sources: detached.sources.filter((source) => source.id !== sourceId) } : detached;
+    const source = project.sources.find((candidate) => candidate.id === sourceId);
+    const nextFiles = new Map(sourceFiles);
+    if (removeSource) {
+      nextFiles.delete(sourceId);
+      await removePersistedSourceFile(project.id, sourceId).catch(() => undefined);
+    }
+    commitProject(nextProject);
+    setSourceFiles(nextFiles);
+    if (directoryHandle) {
+      if (removeSource && source) await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => undefined);
+      await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+    }
+  };
+
+  const toggleBidTemplate = (item: BidFileChecklistItem, sourceId: string) => {
+    const selected = item.selectedTemplateSourceIds.includes(sourceId);
+    if (!selected && item.outputFormat) {
+      const source = project.sources.find((candidate) => candidate.id === sourceId);
+      if (source && tenderTemplateFileFormat(source.name) !== item.outputFormat) {
+        alertBidTemplateMismatch(source.name, item.outputFormat);
+        return;
+      }
+    }
+    updateBidFile(item.id, { selectedTemplateSourceIds: selected ? item.selectedTemplateSourceIds.filter((id) => id !== sourceId) : [...item.selectedTemplateSourceIds, sourceId] });
+  };
+
+  const setBidOutputFormat = (item: BidFileChecklistItem, format: TenderOutputFormat | "") => {
+    if (format) {
+      const mismatch = item.selectedTemplateSourceIds
+        .map((id) => project.sources.find((source) => source.id === id))
+        .find((source) => source && tenderTemplateFileFormat(source.name) !== format);
+      if (mismatch) {
+        alertBidTemplateMismatch(mismatch.name, format);
+        return;
+      }
+    }
+    updateBidFile(item.id, { outputFormat: format || undefined });
+  };
+
+  const bidFileInputs = (item: BidFileChecklistItem, requireReadableReferences = false) => {
+    if (!item.outputFormat) {
+      window.alert(locale === "zh" ? "请先选择输出格式。" : "Select an output format first.");
+      return null;
+    }
+    const templates = item.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+    const mismatch = templates.find((source) => tenderTemplateFileFormat(source.name) !== item.outputFormat);
+    if (mismatch) {
+      alertBidTemplateMismatch(mismatch.name, item.outputFormat);
+      return null;
+    }
+    const references = item.selectedReferenceSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+    if (requireReadableReferences) {
+      const unreadable = references.find((source) => source.requiresOcr || !source.segments.some((segment) => segment.text.trim()));
+      if (unreadable) {
+        window.alert(locale === "zh" ? `参考资料“${unreadable.name}”无法提取文本，请先转换为可读取文件，或选择“输出任务”交由 Codex 处理原文件。` : `Reference “${unreadable.name}” has no extractable text. Convert it first or output a Codex task to process the original file.`);
+        return null;
+      }
+    }
+    return { templates, references, outputFormat: item.outputFormat };
+  };
+
+  const generateBidFile = async (item: BidFileChecklistItem, invocation: ModelInvocation) => {
+    const inputs = bidFileInputs(item, true);
+    if (!inputs) return;
+    setBusy(true);
+    setGeneratingActionId(`bid-output-${item.id}`);
+    try {
+      const prompt = buildBidFilePrompt(project, item, inputs.references, inputs.templates, locale);
+      const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
+      const generated = await createTenderGeneratedFile(draft.content, item.title, inputs.outputFormat);
+      const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
+      const parsedOutput = await parseSourceFile(generatedFile);
+      const source: SourceDocument = {
+        ...parsedOutput,
+        preprocessStatus: "ready",
+        preprocessedAt: new Date().toISOString(),
+        preprocessMessage: locale === "zh" ? "模型生成文件" : "Model-generated file",
+      };
+      const folderName = safeDirectoryName("投标阶段-投标文件输出");
+      const relativePath = directoryHandle
+        ? await saveAnalysisFileToDirectory(directoryHandle, project, folderName, generated.name, generated.blob)
+        : `downloads/${generated.name}`;
+      const record: BidGeneratedFile = {
+        id: createId("bid-output"),
+        name: generated.name,
+        format: inputs.outputFormat,
+        createdAt: new Date().toISOString(),
+        provider: draft.provider,
+        model: draft.model,
+        sourceId: source.id,
+        relativePath,
+        referenceSourceIds: inputs.references.map((candidate) => candidate.id),
+        templateSourceIds: inputs.templates.map((candidate) => candidate.id),
+        detailRequirements: item.detailRequirements,
+      };
+      const nextFiles = new Map(sourceFiles).set(source.id, generatedFile);
+      const nextProject = syncProjectStage({
+        ...project,
+        sources: [...project.sources, source],
+        bidFileChecklist: project.bidFileChecklist.map((candidate) => candidate.id === item.id ? { ...candidate, status: "confirmed", generatedFiles: [...candidate.generatedFiles, record] } : candidate),
+        updatedAt: new Date().toISOString(),
+      });
+      commitProject(nextProject);
+      setSourceFiles(nextFiles);
+      setGeneratedBlobs((current) => new Map(current).set(record.id, generated.blob));
+      await persistSourceFiles(project.id, new Map([[source.id, generatedFile]])).catch(() => undefined);
+      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
+      else downloadBlob(generated.name, generated.blob);
+      setNotice(locale === "zh" ? `“${generated.name}”已生成。` : `“${generated.name}” generated.`);
+    } catch {
+      setNotice(locale === "zh" ? "投标文件生成失败，请检查模型服务、参考资料和接口配置。" : "Bid file generation failed. Check the model service, references, and API settings.");
+    } finally {
+      setBusy(false);
+      setGeneratingActionId("");
+    }
+  };
+
+  const startBidFileGeneration = (item: BidFileChecklistItem) => {
+    const invocation = configuredModel();
+    if (invocation) {
+      void generateBidFile(item, invocation);
+      return;
+    }
+    if (!bidFileInputs(item)) return;
+    setPendingModelAction({ kind: "bid-output", bidFileId: item.id, anchorId: `bid-output-${item.id}` });
+  };
+
+  const openBidGeneratedFile = async (record: BidGeneratedFile) => {
+    try {
+      const file = generatedBlobs.get(record.id) || sourceFiles.get(record.sourceId) || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, record.relativePath) : null);
+      if (!file) throw new Error("FILE_NOT_AVAILABLE");
+      if (record.format === "md") {
+        const url = URL.createObjectURL(file);
+        window.open(url, "_blank", "noopener,noreferrer");
+        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+      } else downloadBlob(record.name, file);
+    } catch {
+      setNotice(locale === "zh" ? "找不到该投标文件，请重新选择项目路径。" : "The bid file is unavailable. Select the project folder again.");
+    }
+  };
+
+  const removeBidGeneratedFile = async (item: BidFileChecklistItem, record: BidGeneratedFile) => {
+    const detached = syncProjectStage({
+      ...project,
+      bidFileChecklist: project.bidFileChecklist.map((candidate) => candidate.id === item.id ? { ...candidate, generatedFiles: candidate.generatedFiles.filter((file) => file.id !== record.id) } : candidate),
+      updatedAt: new Date().toISOString(),
+    });
+    const removeSource = !sourceIsReferenced(detached, record.sourceId);
+    const nextProject = removeSource ? { ...detached, sources: detached.sources.filter((source) => source.id !== record.sourceId) } : detached;
+    const nextFiles = new Map(sourceFiles);
+    const nextBlobs = new Map(generatedBlobs);
+    if (removeSource) {
+      nextFiles.delete(record.sourceId);
+      await removePersistedSourceFile(project.id, record.sourceId).catch(() => undefined);
+    }
+    nextBlobs.delete(record.id);
+    commitProject(nextProject);
+    setSourceFiles(nextFiles);
+    setGeneratedBlobs(nextBlobs);
+    if (directoryHandle) {
+      await removeWorkspaceFileFromRelativePath(directoryHandle, record.relativePath).catch(() => undefined);
+      await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+    }
+  };
+
   useEffect(() => {
     if (!ready || !filesHydrated || !resumeModelAction) return;
     const pending = resumeModelAction;
@@ -1502,6 +1730,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     if (pending.kind === "tender-ocr") void performTenderOcr(pending.sourceIds, invocation);
     else if (pending.kind === "tender-analysis") void runTenderAnalysis("analysis", invocation);
     else if (pending.kind === "tender-comparison") void runTenderAnalysis("comparison", invocation);
+    else if (pending.kind === "bid-output") {
+      const item = project.bidFileChecklist.find((candidate) => candidate.id === pending.bidFileId);
+      if (item) void generateBidFile(item, invocation);
+    }
   }, [filesHydrated, ready, resumeModelAction]);
 
   const saveTenderTask = async (task: { name: string; content: string }) => {
@@ -1541,6 +1773,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       void saveTenderTask(buildCodexTenderTask(kind === "analysis" ? "requirements" : "comparison", project, prompt, inputs.outputFormat, locale));
       return;
     }
+    if (pending.kind === "bid-output") {
+      const item = project.bidFileChecklist.find((candidate) => candidate.id === pending.bidFileId);
+      if (!item) return;
+      const inputs = bidFileInputs(item);
+      if (!inputs) return;
+      void saveTenderTask(buildCodexBidFileTask(project, item, inputs.references, inputs.templates, locale));
+      return;
+    }
     const round = project.presalesRounds.find((item) => item.id === pending.roundId);
     if (!round) return;
     if (pending.kind === "customer-analysis") {
@@ -1577,17 +1817,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setSelectedActionIds(new Set());
     setExpandedTenderSourceId("");
     setExpandedTenderResultId("");
+    setExpandedBidFileId("");
     void clearPersistedSourceFiles(previousProjectId).catch(() => undefined);
-  };
-
-  const addEvidence = () => {
-    const evidence: EvidenceRef = { id: createId("evidence"), title: locale === "zh" ? "待核验资料" : "Evidence to verify", kind: "manual", fileName: "", version: "", verifiedAt: "", expiresAt: "", sourceRef: null, notes: "" };
-    updateProject("evidence", [...project.evidence, evidence]);
-  };
-
-  const addDeliverable = (stage: "presales" | "tender" | "delivery") => {
-    const deliverable: Deliverable = { id: createId("deliverable"), stage, kind: stage === "tender" ? "technical-proposal" : stage === "delivery" ? "handover-pack" : "preliminary-solution", title: locale === "zh" ? "新交付物" : "New deliverable", status: "not-started", owner: "", dueDate: "", sourceIds: [], notes: "" };
-    updateProject("deliverables", [...project.deliverables, deliverable]);
   };
 
   const chooseDirectory = async () => {
@@ -1877,14 +2108,29 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     </>;
   };
 
-  const renderBid = () => <>
-    <section className="work-section"><div className="section-heading"><div><p>{t.materialsEyebrow}</p><h2>{t.evidenceLibrary}</h2></div><button className="icon-command" type="button" title={t.add} onClick={addEvidence}><Plus size={18}/></button></div>
-      <div className="evidence-table"><div className="table-head"><span>{locale === "zh" ? "资料" : "Material"}</span><span>{locale === "zh" ? "类型" : "Type"}</span><span>{locale === "zh" ? "版本 / 文件" : "Version / file"}</span><span>{locale === "zh" ? "核验 / 复核" : "Verified / review"}</span><span></span></div>{project.evidence.map((item) => <div className="table-row" key={item.id}><input value={item.title} onChange={(event) => updateProject("evidence", project.evidence.map((candidate) => candidate.id === item.id ? { ...candidate, title: event.target.value } : candidate))}/><select value={item.kind} onChange={(event) => updateProject("evidence", project.evidence.map((candidate) => candidate.id === item.id ? { ...candidate, kind: event.target.value as EvidenceRef["kind"] } : candidate))}>{Object.entries(evidenceKindLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><div className="paired"><input placeholder="v1.0" value={item.version} onChange={(event) => updateProject("evidence", project.evidence.map((candidate) => candidate.id === item.id ? { ...candidate, version: event.target.value } : candidate))}/><input placeholder="file.pdf" value={item.fileName} onChange={(event) => updateProject("evidence", project.evidence.map((candidate) => candidate.id === item.id ? { ...candidate, fileName: event.target.value } : candidate))}/></div><div className="paired"><input type="date" value={item.verifiedAt} onChange={(event) => updateProject("evidence", project.evidence.map((candidate) => candidate.id === item.id ? { ...candidate, verifiedAt: event.target.value } : candidate))}/><input type="date" value={item.expiresAt} onChange={(event) => updateProject("evidence", project.evidence.map((candidate) => candidate.id === item.id ? { ...candidate, expiresAt: event.target.value } : candidate))}/></div><button className="row-delete" type="button" title={t.remove} aria-label={t.remove} onClick={() => updateProject("evidence", project.evidence.filter((candidate) => candidate.id !== item.id))}><Trash2 size={16}/></button></div>)}</div>
-    </section>
-    <section className="work-section"><div className="section-heading"><div><p>{t.complianceEyebrow}</p><h2>{t.responseMatrix}</h2></div><span>{coverage.total}</span></div><div className="response-table"><div className="response-head"><span>{locale === "zh" ? "要求" : "Requirement"}</span><span>{locale === "zh" ? "响应" : "Response"}</span><span>{locale === "zh" ? "偏离" : "Deviation"}</span><span>{locale === "zh" ? "证据" : "Evidence"}</span><span>{locale === "zh" ? "正式措辞" : "Formal wording"}</span></div>{project.requirements.filter((item) => item.baseline === "tender").map((item) => <div className="response-row" key={item.id}><div><strong>{item.title}</strong><small>{item.sourceRef?.locator || (locale === "zh" ? "缺少来源" : "Source missing")}</small></div><select value={item.responseStatus} onChange={(event) => updateRequirement(item.id, { responseStatus: event.target.value as Requirement["responseStatus"] })}>{Object.entries(responseLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><select value={item.deviationType} onChange={(event) => updateRequirement(item.id, { deviationType: event.target.value as Requirement["deviationType"] })}>{Object.entries(deviationLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><div className="evidence-checks">{project.evidence.map((evidence) => <label key={evidence.id} title={evidence.title}><input type="checkbox" checked={item.evidenceRefs.includes(evidence.id)} onChange={(event) => updateRequirement(item.id, { evidenceRefs: event.target.checked ? [...item.evidenceRefs, evidence.id] : item.evidenceRefs.filter((id) => id !== evidence.id) })}/><span>{evidence.title}</span></label>)}</div><textarea rows={3} value={item.formalResponse} onChange={(event) => updateRequirement(item.id, { formalResponse: event.target.value })}/></div>)}</div></section>
-    <section className="work-section"><div className="section-heading"><div><p>{t.technicalEyebrow}</p><h2>{t.solutionSections}</h2></div><button className="icon-command" type="button" title={t.add} onClick={() => updateProject("sections", [...project.sections, { id: createId("section"), title: locale === "zh" ? "新技术章节" : "New technical section", purpose: "", requirementIds: [], evidenceIds: [], body: "", reviewState: "draft" }])}><Plus size={18}/></button></div><div className="section-builder">{project.sections.map((item, index) => <article key={item.id}><header><span>{String(index + 1).padStart(2, "0")}</span><input value={item.title} onChange={(event) => updateProject("sections", project.sections.map((candidate) => candidate.id === item.id ? { ...candidate, title: event.target.value } : candidate))}/><select value={item.reviewState} onChange={(event) => updateProject("sections", project.sections.map((candidate) => candidate.id === item.id ? { ...candidate, reviewState: event.target.value as typeof item.reviewState } : candidate))}>{Object.entries(reviewLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></header><input placeholder={locale === "zh" ? "本章节解决什么问题" : "Purpose of this section"} value={item.purpose} onChange={(event) => updateProject("sections", project.sections.map((candidate) => candidate.id === item.id ? { ...candidate, purpose: event.target.value } : candidate))}/><textarea rows={5} placeholder={locale === "zh" ? "仅根据已核验资料编制；缺少证据时保留待确认。" : "Draft only from verified materials; keep evidence gaps explicit."} value={item.body} onChange={(event) => updateProject("sections", project.sections.map((candidate) => candidate.id === item.id ? { ...candidate, body: event.target.value } : candidate))}/></article>)}</div></section>
-    <section className="work-section"><div className="section-heading"><div><p>{t.packageEyebrow}</p><h2>{t.deliverables}</h2></div><button className="icon-command" type="button" title={t.add} onClick={() => addDeliverable("tender")}><Plus size={18}/></button></div><div className="package-register">{(Object.keys(deliverableKindLabels[locale]) as Array<keyof typeof deliverableKindLabels.zh>).map((kind) => { const existing = project.deliverables.find((item) => item.kind === kind); return <button type="button" className={existing?.status || "not-started"} key={kind} onClick={() => existing ? updateProject("deliverables", project.deliverables.map((item) => item.id === existing.id ? { ...item, status: item.status === "approved" ? "draft" : "approved" } : item)) : updateProject("deliverables", [...project.deliverables, { id: createId("deliverable"), stage: "tender", kind, title: deliverableKindLabels[locale][kind], status: "approved", owner: project.owner, dueDate: project.deadline, sourceIds: [], notes: "" }])}><span>{existing?.status === "approved" ? <Check size={17}/> : <FileCheck2 size={17}/>}</span><strong>{deliverableKindLabels[locale][kind]}</strong><small>{deliverableStatusLabels[locale][existing?.status || "not-started"]}</small></button>; })}</div></section>
-  </>;
+  const renderBid = () => <section className="work-section" id="bid-output">
+    <div className="section-heading"><div><p>{locale === "zh" ? "投标阶段 / 文件编制" : "BID / DOCUMENT PREPARATION"}</p><h2>{locale === "zh" ? "投标文件输出" : "Bid file output"}</h2></div><span>{project.bidFileChecklist.length}</span></div>
+    {project.bidFileChecklist.length ? <div className="bid-output-list">{project.bidFileChecklist.map((item) => {
+      const expanded = expandedBidFileId === item.id;
+      const templates = item.templateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+      const references = item.referenceSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+      const allReferencesSelected = references.length > 0 && references.every((source) => item.selectedReferenceSourceIds.includes(source.id));
+      return <article className={expanded ? "expanded" : ""} id={`bid-output-${item.id}`} key={item.id}>
+        <button className="bid-output-summary" type="button" aria-expanded={expanded} onClick={() => setExpandedBidFileId(expanded ? "" : item.id)}>
+          <FileOutput size={21}/><span><strong>{item.title}</strong><small>{bidFileCategoryLabels[locale][item.category]}{item.notes ? ` · ${item.notes}` : ""}</small></span><span>{item.generatedFiles.length ? (locale === "zh" ? `已生成 ${item.generatedFiles.length}` : `${item.generatedFiles.length} generated`) : (locale === "zh" ? "待编制" : "Not generated")}</span><ChevronRight size={18}/>
+        </button>
+        {expanded && <div className="bid-output-editor">
+          <div className="bid-material-grid">
+            <section><div className="bid-editor-heading"><strong>{locale === "zh" ? "文件模板" : "File template"}</strong><label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传模板" : "Upload template"}<input hidden type="file" accept=".docx,.xlsx,.pptx,.md" onChange={(event) => { void importBidFiles(item, event.target.files, "template"); event.currentTarget.value = ""; }}/></label></div>{templates.length ? <div className="template-source-list">{templates.map((source) => <div className={item.selectedTemplateSourceIds.includes(source.id) ? "selected" : ""} key={source.id}><button type="button" aria-pressed={item.selectedTemplateSourceIds.includes(source.id)} onClick={() => toggleBidTemplate(item, source.id)}><FileText size={15}/><span>{source.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除模板 ${source.name}` : `Delete template ${source.name}`} onClick={() => void removeBidSource(item, source.id, "template")}><X size={14}/></button></div>)}</div> : <div className="bid-material-empty">{locale === "zh" ? "未上传时使用通用模板" : "A general template will be used"}</div>}</section>
+            <section><div className="bid-editor-heading"><strong>{locale === "zh" ? "参考资料" : "Reference materials"}</strong><label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传参考资料" : "Upload references"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importBidFiles(item, event.target.files, "reference"); event.currentTarget.value = ""; }}/></label></div>{references.length ? <><label className="compact-check bid-select-all"><input type="checkbox" aria-label={locale === "zh" ? `全选 ${item.title} 参考资料` : `Select all references for ${item.title}`} checked={allReferencesSelected} onChange={(event) => updateBidFile(item.id, { selectedReferenceSourceIds: event.target.checked ? references.map((source) => source.id) : [] })}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label><div className="customer-source-list">{references.map((source) => <div key={source.id}><label><input type="checkbox" aria-label={locale === "zh" ? `选择参考资料 ${source.name}` : `Select reference ${source.name}`} checked={item.selectedReferenceSourceIds.includes(source.id)} onChange={(event) => updateBidFile(item.id, { selectedReferenceSourceIds: event.target.checked ? [...new Set([...item.selectedReferenceSourceIds, source.id])] : item.selectedReferenceSourceIds.filter((id) => id !== source.id) })}/><span><Check size={12}/></span><FileText size={15}/><strong>{source.name}</strong></label><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除参考资料 ${source.name}` : `Delete reference ${source.name}`} onClick={() => void removeBidSource(item, source.id, "reference")}><X size={14}/></button></div>)}</div></> : <div className="bid-material-empty">{locale === "zh" ? "尚未上传参考资料" : "No references uploaded"}</div>}</section>
+          </div>
+          <div className="bid-output-fields"><Field label={locale === "zh" ? "输出格式" : "Output format"}><select aria-label={locale === "zh" ? `输出格式 ${item.title}` : `Output format ${item.title}`} value={item.outputFormat || ""} onChange={(event) => setBidOutputFormat(item, event.target.value as TenderOutputFormat | "")}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="xlsx">Excel</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field><Field wide label={locale === "zh" ? "细节要求" : "Detailed requirements"}><textarea aria-label={locale === "zh" ? `细节要求 ${item.title}` : `Detailed requirements ${item.title}`} rows={7} placeholder={locale === "zh" ? "填写文件范围、重点内容、章节结构、语气、不得承诺事项及需继承的模板要求" : "Specify scope, emphasis, structure, tone, prohibited commitments, and template requirements"} value={item.detailRequirements} onChange={(event) => updateBidFile(item.id, { detailRequirements: event.target.value })}/></Field></div>
+          <button className="generate-command bid-generate-command" type="button" disabled={busy} onClick={() => startBidFileGeneration(item)}><Sparkles size={18}/>{generatingActionId === `bid-output-${item.id}` ? (locale === "zh" ? "正在生成…" : "Generating…") : (locale === "zh" ? "生成文件" : "Generate file")}</button>
+          {item.generatedFiles.length > 0 && <div className="bid-generated-list"><strong>{locale === "zh" ? "已生成文件" : "Generated files"}</strong>{item.generatedFiles.map((record) => <div key={record.id}><button type="button" onClick={() => void openBidGeneratedFile(record)}><FileCheck2 size={17}/><span><strong>{record.name}</strong><small>{record.provider} / {record.model} · {new Date(record.createdAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}</small></span><ExternalLink size={15}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除生成文件 ${record.name}` : `Delete generated file ${record.name}`} onClick={() => void removeBidGeneratedFile(item, record)}><Trash2 size={16}/></button></div>)}</div>}
+        </div>}
+      </article>;
+    })}</div> : <div className="empty-state"><FileOutput size={26}/><p>{locale === "zh" ? "招标要求分析生成投标文件清单后，文件会同步显示在这里。" : "Files will appear here after tender analysis creates the bid file checklist."}</p></div>}
+  </section>;
 
   const renderHandover = () => <>
     <section className="work-section"><div className="section-heading"><div><p>{t.commitmentEyebrow}</p><h2>{t.commitments}</h2></div><span>{coverage.approved}</span></div><div className="commitment-list">{project.requirements.filter((item) => item.reviewState === "approved").map((item) => <article key={item.id}><header><span>{responseLabels[locale][item.responseStatus]}</span><strong>{item.title}</strong></header><p>{item.formalResponse}</p><footer>{item.acceptanceCriteria || (locale === "zh" ? "验收标准待补充" : "Acceptance criteria missing")}</footer></article>)}</div></section>
