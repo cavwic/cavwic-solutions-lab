@@ -213,6 +213,7 @@ test("localizes every visible date and time input without clipping native placeh
   await communicationTime.fill("2026-08-23T09:30");
   await expect(deadline.locator("xpath=..").locator("span")).toHaveText("2026/08/23");
   await expect(communicationTime.locator("xpath=..").locator("span")).toHaveText("2026/08/23  09:30");
+  await expect.poll(() => communicationTime.locator("xpath=..").locator("span").evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 
   await page.getByRole("button", { name: "Switch to English" }).click();
   const englishDeadline = page.getByLabel("Target deadline", { exact: true });
