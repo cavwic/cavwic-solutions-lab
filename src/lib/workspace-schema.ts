@@ -26,6 +26,13 @@ export const deviationTypeSchema = z.enum(["positive", "none", "negative", "pend
 export const reviewStateSchema = z.enum(["draft", "reviewed", "approved"]);
 export const sourceFileTypeSchema = z.enum(["pdf", "docx", "xlsx", "pptx", "md", "txt", "csv", "json", "png", "jpg", "jpeg", "webp", "ocr"]);
 export const preprocessStatusSchema = z.enum(["uploaded", "ready", "needs-ocr", "skipped", "processing", "failed"]);
+export const generalTemplateFormatSchema = z.enum(["docx", "xlsx", "pptx"]);
+
+export const generalTemplatesSchema = z.object({
+  docxSourceId: z.string().default(""),
+  xlsxSourceId: z.string().default(""),
+  pptxSourceId: z.string().default(""),
+});
 
 export const sourceSegmentSchema = z.object({
   id: z.string().min(1),
@@ -46,6 +53,7 @@ export const sourceDocumentSchema = z.object({
   preprocessStatus: preprocessStatusSchema.default("uploaded"),
   preprocessedAt: z.string().default(""),
   preprocessMessage: z.string().default(""),
+  workspacePath: z.string().default(""),
   segments: z.array(sourceSegmentSchema),
 });
 
@@ -307,6 +315,76 @@ export const bidFileChecklistItemSchema = z.object({
   generatedFiles: z.array(bidGeneratedFileSchema).default([]),
 });
 
+export const handoverDeliverableTypeSchema = z.enum([
+  "document",
+  "drawing-bom",
+  "software",
+  "test-record",
+  "training",
+  "site-action",
+  "approval",
+  "other",
+]);
+
+export const handoverResponseMethodSchema = z.enum([
+  "file",
+  "report",
+  "path",
+  "confirmation",
+  "mixed",
+]);
+
+export const handoverTaskStatusSchema = z.enum([
+  "pending",
+  "working",
+  "blocked",
+  "submitted",
+  "accepted",
+]);
+
+export const handoverDepartmentSchema = z.object({
+  id: z.string().min(1),
+  name: z.string(),
+  responsibility: z.string(),
+  owner: z.string(),
+  defaultDeliverableType: handoverDeliverableTypeSchema,
+  defaultResponseMethod: handoverResponseMethodSchema,
+});
+
+export const handoverTaskSchema = z.object({
+  id: z.string().min(1),
+  title: z.string(),
+  departmentId: z.string(),
+  scope: z.string(),
+  deliverableType: handoverDeliverableTypeSchema,
+  responseMethod: handoverResponseMethodSchema,
+  deliverableName: z.string(),
+  owner: z.string(),
+  dueDate: z.string(),
+  status: handoverTaskStatusSchema,
+  dependencyNotes: z.string(),
+  acceptanceCriteria: z.string(),
+  sourceIds: z.array(z.string()).default([]),
+  responseText: z.string(),
+  responsePath: z.string(),
+  responseSourceIds: z.array(z.string()).default([]),
+});
+
+export const handoverConfigSchema = z.object({
+  awardSourceIds: z.array(z.string()).default([]),
+  selectedAwardSourceIds: z.array(z.string()).default([]),
+  awardNotes: z.string().default(""),
+  checklistNumber: z.string().default(""),
+  projectNumber: z.string().default(""),
+  temporaryChanges: z.string().default(""),
+  departments: z.array(handoverDepartmentSchema).default([]),
+  excludedBidSourceIds: z.array(z.string()).default([]),
+  tasks: z.array(handoverTaskSchema).default([]),
+  lastSplitAt: z.string().default(""),
+  lastSplitProvider: z.enum(["local", "cloud", "codex"]).optional(),
+  lastSplitModel: z.string().default(""),
+});
+
 export const projectManifestSchema = z.object({
   schemaVersion: z.literal(SCHEMA_VERSION),
   id: z.string().min(1),
@@ -317,10 +395,12 @@ export const projectManifestSchema = z.object({
   stage: projectStageSchema,
   locale: localeSchema,
   localPathHint: z.string(),
+  generalTemplates: generalTemplatesSchema.default({ docxSourceId: "", xlsxSourceId: "", pptxSourceId: "" }),
   budget: z.string(),
   deadline: z.string(),
   objective: z.string(),
   constraints: z.string(),
+  confirmedTextFields: z.array(z.string()).default([]),
   updatedAt: z.string(),
   sources: z.array(sourceDocumentSchema),
   requirements: z.array(requirementSchema),
@@ -337,6 +417,19 @@ export const projectManifestSchema = z.object({
   tenderAnalysis: tenderAnalysisConfigSchema.default({ keywords: [], analysisRequirements: "", templateSourceIds: [], selectedTemplateSourceIds: [], results: [] }),
   tenderComparison: tenderComparisonConfigSchema.default({ selectedPresalesSourceIds: [], templateSourceIds: [], selectedTemplateSourceIds: [], results: [] }),
   bidFileChecklist: z.array(bidFileChecklistItemSchema).default([]),
+  handover: handoverConfigSchema.default({
+    awardSourceIds: [],
+    selectedAwardSourceIds: [],
+    awardNotes: "",
+    checklistNumber: "",
+    projectNumber: "",
+    temporaryChanges: "",
+    departments: [],
+    excludedBidSourceIds: [],
+    tasks: [],
+    lastSplitAt: "",
+    lastSplitModel: "",
+  }),
   handoverNotes: z.string(),
 });
 
@@ -376,6 +469,8 @@ export type PresalesAnalysisResult = z.infer<typeof presalesAnalysisResultSchema
 export type PresalesParticipant = z.infer<typeof presalesParticipantSchema>;
 export type PresalesRound = z.infer<typeof presalesRoundSchema>;
 export type PreprocessStatus = z.infer<typeof preprocessStatusSchema>;
+export type GeneralTemplateFormat = z.infer<typeof generalTemplateFormatSchema>;
+export type GeneralTemplates = z.infer<typeof generalTemplatesSchema>;
 export type TenderOutputFormat = z.infer<typeof tenderOutputFormatSchema>;
 export type TenderClarificationRound = z.infer<typeof tenderClarificationRoundSchema>;
 export type TenderAnalysisResult = z.infer<typeof tenderAnalysisResultSchema>;
@@ -383,6 +478,12 @@ export type TenderAnalysisConfig = z.infer<typeof tenderAnalysisConfigSchema>;
 export type TenderComparisonConfig = z.infer<typeof tenderComparisonConfigSchema>;
 export type BidGeneratedFile = z.infer<typeof bidGeneratedFileSchema>;
 export type BidFileChecklistItem = z.infer<typeof bidFileChecklistItemSchema>;
+export type HandoverDeliverableType = z.infer<typeof handoverDeliverableTypeSchema>;
+export type HandoverResponseMethod = z.infer<typeof handoverResponseMethodSchema>;
+export type HandoverTaskStatus = z.infer<typeof handoverTaskStatusSchema>;
+export type HandoverDepartment = z.infer<typeof handoverDepartmentSchema>;
+export type HandoverTask = z.infer<typeof handoverTaskSchema>;
+export type HandoverConfig = z.infer<typeof handoverConfigSchema>;
 export type ProjectManifest = z.infer<typeof projectManifestSchema>;
 export type WorkspaceManifest = z.infer<typeof workspaceManifestSchema>;
 export type OutputManifest = z.infer<typeof outputManifestSchema>;
@@ -394,10 +495,32 @@ export function createId(prefix: string): string {
   return `${prefix}-${random}`;
 }
 
+function toChineseInteger(value: number): string {
+  if (!Number.isInteger(value) || value <= 0 || value > 9999) return String(value);
+  const digits = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+  const units = ["", "十", "百", "千"];
+  const text = String(value);
+  let result = "";
+  let pendingZero = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const digit = Number(text[index]);
+    const unitIndex = text.length - index - 1;
+    if (digit === 0) {
+      if (result) pendingZero = true;
+      continue;
+    }
+    if (pendingZero) result += digits[0];
+    pendingZero = false;
+    if (!(digit === 1 && unitIndex === 1 && !result)) result += digits[digit];
+    result += units[unitIndex];
+  }
+  return result;
+}
+
 export function createPresalesRound(locale: Locale = "zh", index = 1): PresalesRound {
   return {
     id: createId("round"),
-    title: locale === "zh" ? `第 ${index} 次沟通` : `Communication ${index}`,
+    title: locale === "zh" ? `第${toChineseInteger(index)}次沟通` : `Communication ${index}`,
     meetingAt: "",
     participants: [],
     customerNeeds: "",
@@ -429,10 +552,12 @@ export function createEmptyProject(locale: Locale = "zh"): ProjectManifest {
     stage: "presales",
     locale,
     localPathHint: "",
+    generalTemplates: { docxSourceId: "", xlsxSourceId: "", pptxSourceId: "" },
     budget: "",
     deadline: "",
     objective: "",
     constraints: "",
+    confirmedTextFields: [],
     updatedAt,
     sources: [],
     requirements: [],
@@ -446,13 +571,49 @@ export function createEmptyProject(locale: Locale = "zh"): ProjectManifest {
     sections: [],
     pocPlan: { objective: "", demoScope: "", acceptance: "", failureAndFallback: "" },
     enterpriseContext: { companyName: "", platform: "", importedAt: "", notes: "", sourceIds: [] },
-    presalesRounds: [createPresalesRound(locale, 1)],
+    presalesRounds: [],
     tenderSourceIds: [],
     selectedTenderSourceIds: [],
     tenderClarificationRounds: [],
     tenderAnalysis: { keywords: [], analysisRequirements: "", templateSourceIds: [], selectedTemplateSourceIds: [], results: [] },
     tenderComparison: { selectedPresalesSourceIds: [], templateSourceIds: [], selectedTemplateSourceIds: [], results: [] },
     bidFileChecklist: [],
+    handover: {
+      awardSourceIds: [],
+      selectedAwardSourceIds: [],
+      awardNotes: "",
+      checklistNumber: "",
+      projectNumber: "",
+      temporaryChanges: "",
+      departments: [],
+      excludedBidSourceIds: [],
+      tasks: [],
+      lastSplitAt: "",
+      lastSplitModel: "",
+    },
     handoverNotes: "",
   };
+}
+
+export function isLegacyUntouchedPresalesRound(round: PresalesRound): boolean {
+  const defaultTitle = round.title === "第一次沟通" || round.title === "第 1 次沟通" || round.title === "Communication 1";
+  const defaultOutputName = !round.outputName || round.outputName === "第1次沟通响应文件" || round.outputName === "communication-1-response";
+  return defaultTitle
+    && !round.meetingAt
+    && round.participants.length === 0
+    && !round.customerNeeds
+    && round.requirementSourceIds.length === 0
+    && (round.selectedRequirementSourceIds?.length ?? 0) === 0
+    && round.keywords.length === 0
+    && !round.analysisRequirements
+    && round.templateSourceIds.length === 0
+    && round.selectedTemplateSourceIds.length === 0
+    && !round.analysisOutputFormat
+    && round.analysisResults.length === 0
+    && round.actions.length === 0
+    && round.referenceSourceIds.length === 0
+    && !round.generationInstructions
+    && defaultOutputName
+    && round.outputFormat === "docx"
+    && round.generatedFiles.length === 0;
 }

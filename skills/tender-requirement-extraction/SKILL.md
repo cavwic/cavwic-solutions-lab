@@ -11,6 +11,10 @@ Read only the files in the user-supplied local project workspace. Preserve the o
 
 Treat scanned or unreadable pages as missing input. Do not infer their content from neighboring pages, filenames, or common tender language. Report the exact pages that require OCR or manual review.
 
+If an output template is supplied, treat it only as a formatting asset. Do not read template text, cell values, examples, conclusions, or instructions as tender evidence or generated content.
+
+Read each source from its `workspacePath`. Tender originals belong under `2_招标要求/1_招标文件/导入文件`, clarification rounds under `2_招标要求/2_澄清及相关文件`, and generated analysis under `2_招标要求/3_招标文件分析`. When a SHA-256 already exists in the project, reference its canonical path in `说明文档.txt` instead of copying it.
+
 ## Procedure
 
 1. Read `references/extraction-rules.md` and `references/requirement-schema.md`.

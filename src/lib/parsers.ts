@@ -197,6 +197,7 @@ export async function parseSourceFile(file: File): Promise<SourceDocument> {
     preprocessStatus: "uploaded",
     preprocessedAt: "",
     preprocessMessage: "",
+    workspacePath: "",
     segments,
   };
 }

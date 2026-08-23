@@ -20,6 +20,7 @@ function source(id: string, name: string, text: string, locator = "第 1 行"): 
     size: text.length,
     sha256: `${id}-sha256`,
     importedAt: "2026-08-20T00:00:00.000Z",
+    workspacePath: "",
     requiresOcr: false,
     preprocessStatus: "ready",
     preprocessedAt: "2026-08-20T00:00:00.000Z",
@@ -95,7 +96,7 @@ describe("tender generation", () => {
     expect(tenderTemplateFileFormat("响应矩阵.xlsx")).toBe("xlsx");
     expect(tenderTemplateFileFormat("汇报.pptx")).toBe("pptx");
     expect(tenderTemplateFileFormat("结构.md")).toBe("md");
-    expect(buildCodexTenderTask("requirements", project, "prompt", "docx").content).toContain(`projects/${project.id}/outputs/投标阶段-招标文件分析`);
+    expect(buildCodexTenderTask("requirements", project, "prompt", "docx").content).toContain("2_招标要求/3_招标文件分析/1_招标要求分析/生成文件");
     expect(buildCodexOcrTask(project, [source("scan", "scan.txt", "待识别")]).content).toContain(`projects/${project.id}/sources/scan.txt`);
   });
 });

@@ -9,6 +9,8 @@ description: Build and audit a technical bid package from reviewed tender requir
 
 Read `references/bid-package-rules.md` and `references/template-mapping.md`. Work only in the user-supplied local workspace.
 
+Read source files from their `workspacePath`. Keep each checklist item's imported templates and references under its directory in `3_技术标组包/1_投标文件输出`, and write generated deliverables plus non-empty detail requirements under that item's `生成文件` folder. Reuse project files by SHA-256 and record cross-folder references in `说明文档.txt`; do not create duplicate copies.
+
 Do not start formal drafting until:
 
 - Applicable tender rows have source locators and review states.
@@ -20,7 +22,7 @@ If these conditions are not met, produce a blocking list instead of plausible fi
 
 ## Procedure
 
-1. Load the active `project.json`, reviewed requirements, evidence library, working files, and available templates.
+1. Load the active `project.json`, reviewed requirements, evidence library, working files, and available templates. Templates are format-only assets: do not use their body text, cell values, sample claims, commitments, or instructions as drafting input. Prefer the deliverable-specific matching template, then the matching general project template.
 2. Build or update the compliance matrix first. Map each requirement to response status, deviation, evidence, owner, formal wording, technical section, acceptance method, and review state.
 3. Use only these internal response states:
    - `confirmed`: current evidence directly supports the response.
@@ -42,7 +44,7 @@ If these conditions are not met, produce a blocking list instead of plausible fi
    - Certificate and qualification handoff register.
    - `presentation.md` and `presentation-plan.json`.
 8. Use `assets/technical-proposal.md` and `assets/presentation-plan.json` as starting structures.
-9. For a company PPTX template, inspect its layouts with `scripts/render_pptx.py --inspect-template <template.pptx>`. Create or update a layout map, then render the reviewed plan. Do not promise to retain macros, complex animations, OLE objects, or unavailable fonts.
+9. For a company PPTX template, inspect its layouts with `scripts/render_pptx.py --inspect-template <template.pptx>`. Create or update a layout map, then render the reviewed plan. Remove ordinary template slides before adding generated slides; retain only reusable masters, layouts, themes, and supported design assets. Do not promise to retain macros, complex animations, OLE objects, or unavailable fonts.
 10. Run `scripts/validate_bid_package.py <project.json> --strict` before reporting the package ready.
 11. Report blocking requirements, missing evidence, negative deviations, unapproved wording, expired materials, and files that require specialist input.
 

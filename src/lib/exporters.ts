@@ -14,6 +14,9 @@ const deviationLabels = {
 } as const;
 const participantCategoryZh = { customer: "客户", "third-party": "第三方", internal: "公司内人员" } as const;
 const preprocessStatusZh = { uploaded: "已上传", ready: "上传并预处理完成", "needs-ocr": "需要 OCR", skipped: "仅上传，未处理", processing: "处理中", failed: "处理失败" } as const;
+const handoverDeliverableZh = { document: "文件", "drawing-bom": "图纸 / BOM", software: "软件包 / 配置", "test-record": "测试记录", training: "培训材料", "site-action": "现场实施", approval: "审批确认", other: "其他" } as const;
+const handoverResponseZh = { file: "上传文件", report: "文字报告", path: "软件包 / 路径", confirmation: "状态确认", mixed: "混合响应" } as const;
+const handoverStatusZh = { pending: "待处理", working: "进行中", blocked: "受阻", submitted: "已提交", accepted: "已验收" } as const;
 
 function safeStem(value: string): string {
   return value.trim().replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "-").slice(0, 80) || "solution-project";
@@ -68,7 +71,7 @@ export function presentationMarkdown(project: ProjectManifest): string {
     `# 售前沟通记录\n\n${presalesHistory || "尚无沟通记录"}`,
     `# 已确认需求\n\n${approved.length ? approved.map((item) => `- ${item.title}: ${item.formalResponse}`).join("\n") : "- 尚无已批准要求"}`,
     `# 方案结构\n\n${project.sections.length ? project.sections.map((item) => `- ${item.title}: ${item.purpose}`).join("\n") : "- 方案章节待编制"}`,
-    `# 后续行动\n\n${project.actions.filter((item) => item.status !== "done").map((item) => `- ${item.title} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}`).join("\n") || "- 暂无未完成事项"}`,
+    `# 中标交底任务\n\n${project.handover.tasks.map((item) => `- ${item.title || "未命名任务"} / ${project.handover.departments.find((department) => department.id === item.departmentId)?.name || "部门待定"} / ${item.owner || "责任人待定"} / ${handoverStatusZh[item.status]}`).join("\n") || project.actions.filter((item) => item.status !== "done").map((item) => `- ${item.title} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}`).join("\n") || "- 暂无交底任务"}`,
   ];
   return slides.join("\n\n---\n\n");
 }
@@ -113,7 +116,9 @@ export function projectToMarkdown(project: ProjectManifest): string {
     `## 售前与招标差异\n\n${analyzedDiffs.map((item) => `- [${item.relation}] ${item.title}: ${item.presales || "未提供"} -> ${item.tender || "未提供"}（${item.notes || item.result}）`).join("\n") || linkedDiffs.map((item) => `- ${item.relation}: ${item.tender?.title || item.discovery?.title || item.id}`).join("\n") || "尚无可比较基线。"}`,
     `## 投标文件清单\n\n${project.bidFileChecklist.map((item) => `- [${item.status === "confirmed" ? "x" : " "}] ${item.title} / ${item.category} / ${item.notes || "无说明"}`).join("\n") || "尚未生成投标文件清单。"}`,
     `## 技术方案章节\n\n${project.sections.map((item) => `### ${item.title}\n\n${item.body || "待编制"}\n\n关联要求: ${item.requirementIds.join(", ") || "无"}\n\n关联证据: ${item.evidenceIds.join(", ") || "无"}`).join("\n\n") || "尚无技术方案章节。"}`,
-    `## 执行与交底清单\n\n${project.actions.map((item) => `- [${item.status === "done" ? "x" : " "}] ${item.title} / ${item.owner || "责任人待定"} / ${item.dueDate || "日期待定"}`).join("\n") || "暂无任务。"}`,
+    `## 中标补充内容\n\n- 中标资料: ${project.handover.selectedAwardSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("、") || "无"}\n- 中标说明: ${project.handover.awardNotes || "无"}\n- 临时变更: ${project.handover.temporaryChanges || "无"}`,
+    `## 交底部门\n\n${project.handover.departments.map((department) => `- ${department.name || "未命名部门"} / ${department.owner || "负责人待定"} / ${handoverDeliverableZh[department.defaultDeliverableType]} / ${handoverResponseZh[department.defaultResponseMethod]}\n  - 职责: ${department.responsibility || "待填写"}`).join("\n") || "尚未配置部门。"}`,
+    `## 交底清单\n\n${project.handover.tasks.map((item) => `### ${item.title || "未命名交底任务"}\n- 部门: ${project.handover.departments.find((department) => department.id === item.departmentId)?.name || "未分配"}\n- 范围: ${item.scope || "待填写"}\n- 交付: ${handoverDeliverableZh[item.deliverableType]} / ${item.deliverableName || "名称待定"}\n- 响应: ${handoverResponseZh[item.responseMethod]} / ${handoverStatusZh[item.status]}\n- 负责人及截止时间: ${item.owner || "待定"} / ${item.dueDate || "待定"}\n- 前置依赖: ${item.dependencyNotes || "无"}\n- 验收标准: ${item.acceptanceCriteria || "待填写"}\n- 响应记录: ${[item.responseText, item.responsePath, ...item.responseSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id)].filter(Boolean).join("；") || "无"}`).join("\n\n") || "尚无交底任务。"}`,
     `## 审阅问题\n\n${issues.map((item) => `- ${item.severity.toUpperCase()}: ${item.message}`).join("\n") || "未发现阻断问题。"}`,
   ];
   return `${sections.join("\n\n")}\n`;
@@ -171,8 +176,22 @@ export async function projectToDocx(project: ProjectManifest): Promise<Blob> {
       new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } }),
       new Paragraph({ text: "技术方案章节", heading: HeadingLevel.HEADING_1 }),
       ...project.sections.flatMap((section) => [new Paragraph({ text: section.title, heading: HeadingLevel.HEADING_2 }), new Paragraph(section.body || "待编制")]),
-      new Paragraph({ text: "技术交底与未决事项", heading: HeadingLevel.HEADING_1 }),
-      ...project.actions.map((item) => new Paragraph({ text: `${item.title} / ${item.owner || "责任人待定"} / ${item.status}`, bullet: { level: 0 } })),
+      new Paragraph({ text: "中标补充内容", heading: HeadingLevel.HEADING_1 }),
+      new Paragraph({ text: `中标资料：${project.handover.selectedAwardSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id).join("、") || "无"}` }),
+      new Paragraph({ text: `中标说明：${project.handover.awardNotes || "无"}` }),
+      new Paragraph({ text: `临时变更：${project.handover.temporaryChanges || "无"}` }),
+      new Paragraph({ text: "交底部门", heading: HeadingLevel.HEADING_1 }),
+      ...project.handover.departments.flatMap((department) => [new Paragraph({ text: department.name || "未命名部门", heading: HeadingLevel.HEADING_2 }), new Paragraph({ text: `${department.responsibility || "职责待填写"} / ${department.owner || "负责人待定"} / ${handoverDeliverableZh[department.defaultDeliverableType]} / ${handoverResponseZh[department.defaultResponseMethod]}` })]),
+      new Paragraph({ text: "交底清单", heading: HeadingLevel.HEADING_1 }),
+      ...project.handover.tasks.flatMap((item) => [
+        new Paragraph({ text: item.title || "未命名交底任务", heading: HeadingLevel.HEADING_2 }),
+        new Paragraph({ text: `部门：${project.handover.departments.find((department) => department.id === item.departmentId)?.name || "未分配"} / 负责人：${item.owner || "待定"} / 截止时间：${item.dueDate || "待定"} / 状态：${handoverStatusZh[item.status]}` }),
+        new Paragraph({ text: `任务范围：${item.scope || "待填写"}` }),
+        new Paragraph({ text: `交付物：${handoverDeliverableZh[item.deliverableType]} / ${item.deliverableName || "名称待定"} / 响应方式：${handoverResponseZh[item.responseMethod]}` }),
+        new Paragraph({ text: `前置依赖：${item.dependencyNotes || "无"}` }),
+        new Paragraph({ text: `验收标准：${item.acceptanceCriteria || "待填写"}` }),
+        new Paragraph({ text: `响应记录：${[item.responseText, item.responsePath, ...item.responseSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id)].filter(Boolean).join("；") || "无"}` }),
+      ]),
     ] }],
   });
   return Packer.toBlob(document);
@@ -226,6 +245,29 @@ export async function projectToXlsx(project: ProjectManifest): Promise<Blob> {
   const bidFiles = workbook.addWorksheet("投标文件清单", { views: [{ state: "frozen", ySplit: 1 }] });
   bidFiles.columns = [{ header: "文件名称", key: "title", width: 42 }, { header: "类别", key: "category", width: 18 }, { header: "状态", key: "status", width: 16 }, { header: "来源分析", key: "sourceResultId", width: 30 }, { header: "说明", key: "notes", width: 52 }];
   project.bidFileChecklist.forEach((item) => bidFiles.addRow(item));
+
+  const handover = workbook.addWorksheet("中标交底清单", { views: [{ state: "frozen", ySplit: 1 }] });
+  handover.columns = [
+    { header: "任务编号", key: "id", width: 24 }, { header: "责任部门", key: "department", width: 24 }, { header: "任务名称", key: "title", width: 34 },
+    { header: "任务范围", key: "scope", width: 48 }, { header: "交付类型", key: "deliverableType", width: 18 }, { header: "响应方式", key: "responseMethod", width: 18 },
+    { header: "交付物名称", key: "deliverableName", width: 34 }, { header: "责任人", key: "owner", width: 20 }, { header: "截止时间", key: "dueDate", width: 16 },
+    { header: "前置依赖", key: "dependencies", width: 34 }, { header: "验收标准", key: "acceptance", width: 44 }, { header: "响应记录", key: "response", width: 48 }, { header: "状态", key: "status", width: 14 },
+  ];
+  project.handover.tasks.forEach((item) => handover.addRow({
+    id: item.id,
+    department: project.handover.departments.find((department) => department.id === item.departmentId)?.name || "未分配",
+    title: item.title,
+    scope: item.scope,
+    deliverableType: handoverDeliverableZh[item.deliverableType],
+    responseMethod: handoverResponseZh[item.responseMethod],
+    deliverableName: item.deliverableName,
+    owner: item.owner,
+    dueDate: item.dueDate,
+    dependencies: item.dependencyNotes,
+    acceptance: item.acceptanceCriteria,
+    response: [item.responseText, item.responsePath, ...item.responseSourceIds.map((id) => project.sources.find((source) => source.id === id)?.name || id)].filter(Boolean).join("\n"),
+    status: handoverStatusZh[item.status],
+  }));
 
   const evidence = workbook.addWorksheet("资料与证据索引", { views: [{ state: "frozen", ySplit: 1 }] });
   evidence.columns = [{ header: "编号", key: "id", width: 24 }, { header: "资料名称", key: "title", width: 36 }, { header: "类型", key: "kind", width: 22 }, { header: "文件", key: "fileName", width: 32 }, { header: "版本", key: "version", width: 12 }, { header: "核验日期", key: "verifiedAt", width: 16 }, { header: "复核日期", key: "expiresAt", width: 16 }, { header: "说明", key: "notes", width: 48 }];
@@ -302,7 +344,9 @@ export async function projectToPptx(project: ProjectManifest): Promise<Blob> {
   slide.addText(sectionText, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 14, color: "24302D", breakLine: false, valign: "top", margin: 0 });
 
   slide = pptx.addSlide(); slide.background = { color: "F4F6F2" }; addTitle(slide, "06 / NEXT ACTION", "会后执行与技术交底");
-  const actions = project.actions.filter((item) => item.status !== "done").slice(0, 8).map((item) => `• ${item.title}  |  ${item.owner || "责任人待定"}  |  ${item.dueDate || "日期待定"}`).join("\n\n") || "暂无未完成事项。";
+  const actions = project.handover.tasks.slice(0, 8).map((item) => `• ${item.title || "未命名任务"}  |  ${project.handover.departments.find((department) => department.id === item.departmentId)?.name || "部门待定"}  |  ${item.owner || "责任人待定"}  |  ${handoverStatusZh[item.status]}`).join("\n\n")
+    || project.actions.filter((item) => item.status !== "done").slice(0, 8).map((item) => `• ${item.title}  |  ${item.owner || "责任人待定"}  |  ${item.dueDate || "日期待定"}`).join("\n\n")
+    || "暂无未完成事项。";
   slide.addText(actions, { x: 0.7, y: 2, w: 11.8, h: 3.8, fontSize: 15, color: "24302D", breakLine: false, valign: "top", margin: 0 });
 
   const buffer = await pptx.write({ outputType: "arraybuffer" });

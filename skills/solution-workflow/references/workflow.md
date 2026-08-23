@@ -23,9 +23,11 @@ Build the technical volume from reviewed requirements and current company materi
 
 ## 3. Award and handover
 
-Freeze the commitment baseline from the final tender, clarification letters, negotiation record, and contract technical attachment. Identify any difference from the submitted technical volume.
+Build the handover baseline from the award letter, final clarifications, contract technical attachment, and generated final bid files. Keep temporary post-award changes separate and apply them before conflicting award or bid content. Record the conflict and the source used.
 
-Prepare the handover register before the meeting. Assign each requirement, interface, drawing, deployment task, test, training item, certificate, unresolved point, and change to an owner and due date. Project management support begins from this traceable baseline.
+List the actual participating departments before splitting work. For each department, record its responsibility boundary, owner, default deliverable type, and default response method. Then split each interface, drawing, BOM, deployment task, software package, test, training item, certificate, unresolved point, and change into an independently verifiable task.
+
+Every task needs a department, owner, due date, dependency, expected deliverable, response method, source basis, and acceptance criteria. A department may respond with a file, a written report, a software package or controlled path, a status confirmation, or a combination. Do not force a software build into a document upload, and do not accept a status-only reply when the task requires a drawing, BOM, test record, or other file evidence.
 
 ## Gate definitions
 
@@ -34,4 +36,4 @@ Prepare the handover register before the meeting. Assign each requirement, inter
 - Requirement gate: tender rows have source locators and review states.
 - Draft gate: technical sections map to requirements and evidence.
 - Submission gate: approved wording, deviations, attachments, and final checks are complete.
-- Handover gate: commitments, open points, owners, milestones, and changes are accepted internally.
+- Handover gate: the awarded baseline and changes are reconciled, every task has an owner and acceptance criteria, and each submitted or accepted task has the required response record.

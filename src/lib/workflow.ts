@@ -1,6 +1,7 @@
 import {
   createEmptyProject,
   createId,
+  createPresalesRound,
   type Baseline,
   type Locale,
   type ProjectManifest,
@@ -123,6 +124,20 @@ export function validateProject(project: ProjectManifest, locale: Locale = proje
       .find((source) => source && tenderTemplateFileFormat(source.name) !== config.outputFormat);
     if (mismatch) issues.push({ id: `${kind}-${mismatch.id}-template-format`, severity: "warning", area: "source", targetId: mismatch.id, message: zh ? `模板“${mismatch.name}”与当前招标${kind === "analysis" ? "分析" : "对比"}输出格式不匹配。` : `Template "${mismatch.name}" does not match the current tender ${kind} output format.` });
   }
+  const handoverDepartmentIds = new Set(project.handover.departments.map((department) => department.id));
+  for (const task of project.handover.tasks) {
+    const label = task.title || (zh ? "未命名交底任务" : "Untitled handover task");
+    if (!task.departmentId || !handoverDepartmentIds.has(task.departmentId)) issues.push({ id: `${task.id}-department`, severity: "warning", area: "action", targetId: task.id, message: zh ? `交底任务“${label}”尚未分配到有效部门。` : `Handover task "${label}" is not assigned to a valid department.` });
+    if (task.status !== "accepted" && !task.owner.trim()) issues.push({ id: `${task.id}-owner`, severity: "warning", area: "action", targetId: task.id, message: zh ? `交底任务“${label}”没有负责人。` : `Handover task "${label}" has no owner.` });
+    if (!task.acceptanceCriteria.trim()) issues.push({ id: `${task.id}-acceptance`, severity: task.status === "accepted" ? "error" : "warning", area: "action", targetId: task.id, message: zh ? `交底任务“${label}”缺少验收标准。` : `Handover task "${label}" has no acceptance criteria.` });
+    if (task.status === "submitted" || task.status === "accepted") {
+      const hasResponse = task.responseMethod === "file" ? task.responseSourceIds.length > 0
+        : task.responseMethod === "path" ? Boolean(task.responsePath.trim())
+          : task.responseMethod === "mixed" ? Boolean(task.responseSourceIds.length || task.responsePath.trim() || task.responseText.trim())
+            : Boolean(task.responseText.trim());
+      if (!hasResponse) issues.push({ id: `${task.id}-response`, severity: task.status === "accepted" ? "error" : "warning", area: "action", targetId: task.id, message: zh ? `交底任务“${label}”已${task.status === "accepted" ? "验收" : "提交"}，但没有对应响应记录。` : `Handover task "${label}" is ${task.status} without a matching response record.` });
+    }
+  }
   for (const section of project.sections) {
     if (section.reviewState === "approved" && section.requirementIds.length === 0) issues.push({ id: `${section.id}-requirement`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联招标要求。` : `Section "${section.title}" is approved but has no linked tender requirement.` });
     if (section.reviewState === "approved" && section.evidenceIds.length === 0) issues.push({ id: `${section.id}-evidence`, severity: "warning", area: "section", targetId: section.id, message: zh ? `章节“${section.title}”已批准，但没有关联证据。` : `Section "${section.title}" is approved but has no linked evidence.` });
@@ -138,7 +153,14 @@ export function requirementCoverage(project: ProjectManifest) {
 }
 
 export function inferProjectStage(project: ProjectManifest): ProjectStage {
-  const hasDeliveryWork = project.handoverNotes.trim().length > 0
+  const hasDeliveryWork = project.handover.awardSourceIds.length > 0
+    || project.handover.awardNotes.trim().length > 0
+    || project.handover.checklistNumber.trim().length > 0
+    || project.handover.projectNumber.trim().length > 0
+    || project.handover.temporaryChanges.trim().length > 0
+    || project.handover.departments.length > 0
+    || project.handover.tasks.length > 0
+    || project.handoverNotes.trim().length > 0
     || project.actions.some((item) => item.stage === "delivery")
     || project.deliverables.some((item) => item.stage === "delivery");
   if (hasDeliveryWork) return "delivery";
@@ -344,8 +366,8 @@ export function createSampleProject(kind: "ai" | "robot" | "electromechanical" =
     acceptanceCriteria: text.acceptance,
   }, locale);
   project.sources = [
-    { id: "meeting-notes", name: text.meetingFile, fileType: "md", version: "1.0", size: 240, sha256: "sample-meeting-notes", importedAt: project.updatedAt, requiresOcr: false, preprocessStatus: "ready", preprocessedAt: project.updatedAt, preprocessMessage: "", segments: [{ id: "meeting-notes-line-1", locatorKind: "line", locator: text.meetingLine, text: text.meetingExcerpt }] },
-    { id: "tender-v1", name: text.tenderFile, fileType: "pdf", version: "1.0", size: 1024, sha256: "sample-tender-v1", importedAt: project.updatedAt, requiresOcr: false, preprocessStatus: "ready", preprocessedAt: project.updatedAt, preprocessMessage: "", segments: [{ id: "tender-v1-page-18", locatorKind: "page", locator: text.tenderLocator, text: tender.originalText }] },
+    { id: "meeting-notes", name: text.meetingFile, fileType: "md", version: "1.0", size: 240, sha256: "sample-meeting-notes", importedAt: project.updatedAt, workspacePath: "", requiresOcr: false, preprocessStatus: "ready", preprocessedAt: project.updatedAt, preprocessMessage: "", segments: [{ id: "meeting-notes-line-1", locatorKind: "line", locator: text.meetingLine, text: text.meetingExcerpt }] },
+    { id: "tender-v1", name: text.tenderFile, fileType: "pdf", version: "1.0", size: 1024, sha256: "sample-tender-v1", importedAt: project.updatedAt, workspacePath: "", requiresOcr: false, preprocessStatus: "ready", preprocessedAt: project.updatedAt, preprocessMessage: "", segments: [{ id: "tender-v1-page-18", locatorKind: "page", locator: text.tenderLocator, text: tender.originalText }] },
   ];
   project.requirements = [discovery, tender];
   project.evidence = [{ id: "evidence-log-manual", title: text.evidenceTitle, kind: "manual", fileName: "logging-manual.pdf", version: "3.2", verifiedAt: "2026-08-14", expiresAt: "2026-11-12", sourceRef: null, notes: text.evidenceNotes }];
@@ -356,6 +378,15 @@ export function createSampleProject(kind: "ai" | "robot" | "electromechanical" =
   project.sections = [{ id: createId("section"), title: text.sectionTitle, purpose: text.sectionPurpose, requirementIds: [tender.id], evidenceIds: [], body: tender.formalResponse, reviewState: "reviewed" }];
   project.pocPlan = { objective: text.pocObjective, demoScope: text.pocScope, acceptance: text.pocAcceptance, failureAndFallback: text.pocFallback };
   project.handoverNotes = text.handover;
+  project.handover.awardNotes = text.handover;
+  project.handover.departments = [{
+    id: createId("department"),
+    name: locale === "zh" ? "解决方案与交付" : "Solution and delivery",
+    responsibility: text.deliveryActionNotes,
+    owner: text.deliveryActionOwner,
+    defaultDeliverableType: "document",
+    defaultResponseMethod: "mixed",
+  }];
   return project;
 }
 
@@ -372,6 +403,7 @@ export function localizeBuiltInProject(project: ProjectManifest, locale: Locale)
     "title", "originalText", "normalizedText", "scoreWeight", "locator", "excerpt", "formalResponse",
     "acceptanceCriteria", "notes", "text", "purpose", "demoScope", "acceptance",
     "failureAndFallback", "handoverNotes", "customerNeeds", "generationInstructions", "outputName", "responseFileName", "fileRequirements", "analysisRequirements", "prompt",
+    "awardNotes", "temporaryChanges", "responsibility", "scope", "deliverableName", "dependencyNotes", "acceptanceCriteria", "responseText", "responsePath",
   ]);
   const translations = new Map<string, string>();
 
@@ -400,6 +432,12 @@ export function localizeBuiltInProject(project: ProjectManifest, locale: Locale)
   for (const sourceLocale of ["zh", "en"] as const) {
     const fromTemplate = sampleKind ? createSampleProject(sampleKind, sourceLocale) : createEmptyProject(sourceLocale);
     collectTranslations(fromTemplate, toTemplate);
+    for (let index = 1; index <= Math.max(project.presalesRounds.length, 1); index += 1) {
+      const localizedRound = createPresalesRound(locale, index);
+      collectTranslations(createPresalesRound(sourceLocale, index), localizedRound);
+      translations.set(`第 ${index} 次沟通`, localizedRound.title);
+      translations.set(`第${index}次沟通`, localizedRound.title);
+    }
   }
   const localized = translateKnownValues(project) as ProjectManifest;
   return { ...localized, locale, updatedAt: new Date().toISOString() };

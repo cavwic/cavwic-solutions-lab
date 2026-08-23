@@ -14,6 +14,7 @@ function source(id: string, name: string, text: string): SourceDocument {
     size: text.length,
     sha256: `${id}-sha256`,
     importedAt: "2026-08-20T00:00:00.000Z",
+    workspacePath: "",
     requiresOcr: false,
     preprocessStatus: "ready",
     preprocessedAt: "2026-08-20T00:00:00.000Z",
@@ -55,6 +56,7 @@ describe("bid file generation", () => {
     expect(prompt).toContain("重点说明权限、审计和验收边界");
     expect(prompt).toContain("产品手册.txt");
     expect(prompt).toContain("企业模板.docx");
+    expect(prompt).not.toContain("一、项目理解");
     expect(prompt).toContain("不得编造产品参数");
     expect(prompt).toContain("招标书.txt / 第 1 行");
   });
@@ -64,7 +66,7 @@ describe("bid file generation", () => {
     const item = bidFile();
     const task = buildCodexBidFileTask(project, item, [source("reference-1", "产品手册.txt", "已核验资料")], [source("template-1", "企业模板.docx", "模板章节")], "zh");
     expect(task.outputName).toBe("技术方案.docx");
-    expect(task.content).toContain(`projects/${project.id}/outputs/投标阶段-投标文件输出/技术方案.docx`);
+    expect(task.content).toContain("3_技术标组包/1_投标文件输出/技术方案/生成文件/技术方案.docx");
     expect(task.content).toContain(`bidFileChecklist 中 id 为 ${item.id}`);
     expect(task.content).toContain(`projects/${project.id}/sources/产品手册.txt`);
     expect(task.content).toContain("不得补造招标事实");

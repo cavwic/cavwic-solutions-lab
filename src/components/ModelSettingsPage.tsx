@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Cloud, Cpu, KeyRound, Languages, Moon, RotateCcw, Save, Sun, TerminalSquare } from "lucide-react";
+import { ArrowLeft, Check, Cloud, Cpu, KeyRound, RotateCcw, Save, TerminalSquare } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   DEFAULT_MODEL_SETTINGS,
@@ -38,7 +38,7 @@ const copy = {
     apiKey: "API Key（仅当前浏览器会话）",
     apiHint: "密钥写入 sessionStorage，不进入项目文件或静态构建。接口仍需允许浏览器跨域访问。",
     flowTitle: "Codex 使用流程",
-    flow: ["在工作台选择项目路径", "整理资料并生成 Codex 任务", "在 Codex 中执行项目目录里的任务文件", "进入“输出与 Skills”点击重新扫描"],
+    flow: ["在工作台设置项目路径", "按需配置可直接调用的大模型", "在售前、招标、投标或交底阶段处理文件", "进入“输出文件”选择文件并完整输出或导出 ZIP"],
     docs: "查看 OpenAI 的 Codex 套餐说明",
     switchDark: "切换到深色模式",
     switchLight: "切换到浅色模式",
@@ -69,7 +69,7 @@ const copy = {
     apiKey: "API key (current browser session only)",
     apiHint: "The key is kept in sessionStorage and never enters project files or the static build. The endpoint must still allow cross-origin browser requests.",
     flowTitle: "Codex workflow",
-    flow: ["Choose a project folder in the workbench", "Organize sources and create a Codex task", "Run the task file from the project folder in Codex", "Open Outputs and Skills, then select Rescan"],
+    flow: ["Set a project folder in the workbench", "Configure a directly callable model when needed", "Process files in presales, tender, bid, or handover", "Open Output files to copy the selection or export a ZIP"],
     docs: "Read OpenAI's Codex plan guidance",
     switchDark: "Switch to dark mode",
     switchLight: "Switch to light mode",
@@ -82,7 +82,6 @@ function SettingField({ label, children, wide = false }: { label: string; childr
 
 export default function ModelSettingsPage() {
   const [locale, setLocale] = useState<Locale>("zh");
-  const [theme, setTheme] = useState<"light" | "dark">("light");
   const [settings, setSettings] = useState<ModelSettings>(DEFAULT_MODEL_SETTINGS);
   const [apiKey, setApiKey] = useState("");
   const [notice, setNotice] = useState("");
@@ -94,34 +93,20 @@ export default function ModelSettingsPage() {
   useEffect(() => {
     const storedLocale = localStorage.getItem("cavwic-lab-locale");
     const nextLocale: Locale = storedLocale === "zh" || storedLocale === "en" ? storedLocale : navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
-    const storedTheme = localStorage.getItem("cavwic-lab-theme");
-    const nextTheme = storedTheme === "light" || storedTheme === "dark" ? storedTheme : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
     setLocale(nextLocale);
-    setTheme(nextTheme);
     setSettings(readModelSettings());
     setApiKey(readModelApiKey());
     document.documentElement.dataset.locale = nextLocale;
     document.documentElement.lang = nextLocale === "zh" ? "zh-CN" : "en";
-    document.documentElement.dataset.theme = nextTheme;
+    const handleLocaleChange = (event: Event) => {
+      const next = (event as CustomEvent<Locale>).detail;
+      if (next === "zh" || next === "en") setLocale(next);
+    };
+    window.addEventListener("cavwic-locale-change", handleLocaleChange);
+    return () => window.removeEventListener("cavwic-locale-change", handleLocaleChange);
   }, []);
 
   const providerName = useMemo(() => t[settings.provider], [settings.provider, t]);
-
-  const switchLocale = () => {
-    const next = locale === "zh" ? "en" : "zh";
-    setLocale(next);
-    localStorage.setItem("cavwic-lab-locale", next);
-    document.documentElement.dataset.locale = next;
-    document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
-    window.dispatchEvent(new CustomEvent("cavwic-locale-change", { detail: next }));
-  };
-
-  const switchTheme = () => {
-    const next = theme === "light" ? "dark" : "light";
-    setTheme(next);
-    localStorage.setItem("cavwic-lab-theme", next);
-    document.documentElement.dataset.theme = next;
-  };
 
   const save = () => {
     const pendingAction = readModelActionReturnState();
@@ -148,8 +133,6 @@ export default function ModelSettingsPage() {
       <div><p>{t.eyebrow}</p><h1>{t.title}</h1><span>{t.summary}</span></div>
       <div className="settings-page-actions">
         <a className="command-button" href={returnHref}><ArrowLeft size={17}/>{t.back}</a>
-        <button className="icon-command" type="button" aria-label={theme === "light" ? t.switchDark : t.switchLight} title={theme === "light" ? t.switchDark : t.switchLight} onClick={switchTheme}>{theme === "light" ? <Moon size={18}/> : <Sun size={18}/>}</button>
-        <button className="command-button language-command" type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button>
       </div>
     </header>
 

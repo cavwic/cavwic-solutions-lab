@@ -2,10 +2,11 @@ import {
   AlertTriangle,
   Archive,
   BriefcaseBusiness,
+  CalendarDays,
   Check,
   ChevronRight,
-  Copy,
-  Download,
+  ClipboardCheck,
+  Eraser,
   ExternalLink,
   FileArchive,
   FileCheck2,
@@ -15,10 +16,10 @@ import {
   FileSearch,
   FileSpreadsheet,
   FileText,
+  FolderCog,
   FolderOpen,
-  Languages,
-  Moon,
   PackageCheck,
+  Pencil,
   Plus,
   Presentation,
   RefreshCw,
@@ -27,28 +28,29 @@ import {
   Settings2,
   ShieldCheck,
   Sparkles,
-  Sun,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   buildBidFilePrompt,
   buildCodexBidFileTask,
 } from "../lib/bid-generation";
 import {
-  buildProjectArchive,
+  buildCodexHandoverTask,
+  buildHandoverTaskSplitPrompt,
+  requestHandoverTaskSplit,
+} from "../lib/handover-generation";
+import {
   downloadBlob,
-  presentationMarkdown,
-  projectFileStem,
-  projectToCsv,
-  projectToDocx,
-  projectToMarkdown,
-  projectToPptx,
-  projectToXlsx,
 } from "../lib/exporters";
 import { hasReadableSourceText, parseSourceFile } from "../lib/parsers";
+import {
+  createFormatOnlyTemplateSource,
+  generalTemplateSourceId,
+  resolveFormatTemplateSources,
+} from "../lib/format-templates";
 import {
   buildCodexCustomerAnalysisTask,
   buildCodexPresalesTask,
@@ -74,11 +76,16 @@ import {
 } from "../lib/model-action";
 import {
   chooseWorkspaceDirectory,
+  chooseProjectOutputDirectory,
   chooseTaskOutputDirectory,
+  copyWorkspaceFilesToOutput,
   clearPersistedSourceFiles,
+  ensureProjectStageDirectories,
   importProjectArchive,
   loadActiveProject,
+  listWorkspaceOutputFiles,
   loadSourceFilesFromDirectory,
+  migrateWorkspaceDirectory,
   persistWorkspaceDirectory,
   persistSourceFiles,
   readGeneratedFileFromDirectory,
@@ -86,15 +93,35 @@ import {
   removeWorkspaceFileFromRelativePath,
   removePersistedSourceFile,
   restoreSourceFiles,
+  restoreProjectOutputDirectory,
   restoreWorkspaceDirectory,
-  saveGeneratedFileToDirectory,
-  saveAnalysisFileToDirectory,
   saveTaskFileToDirectory,
   saveProjectStateToDirectory,
   saveProjectToDirectory,
+  saveWorkspaceFilesAsZip,
+  ensureWorkspaceDirectoryPath,
+  saveWorkspaceFilesToDirectory,
+  saveWorkspaceTextFiles,
+  synchronizeProjectHistoryToDirectory,
+  synchronizeDerivedWorkspaceArtifacts,
   supportsDirectoryAccess,
+  validateWorkspaceOutputDirectory,
   type DirectoryHandleLike,
+  type WorkspaceOutputFile,
 } from "../lib/workspace-io";
+import { WorkspaceHistory, type HistoryDirection } from "../lib/workspace-history";
+import {
+  WORKSPACE_MODULE_DIRECTORIES,
+  analysisSupplementText,
+  bidItemDirectory,
+  chineseInteger,
+  handoverTaskDirectory,
+  presalesRoundDirectory,
+  responseFileMetadata,
+  safeWorkspaceName,
+  sourceReferenceDocument,
+  tenderClarificationDirectory,
+} from "../lib/workspace-storage";
 import {
   buildCodexOcrTask,
   buildCodexTenderTask,
@@ -117,8 +144,10 @@ import {
   createEmptyProject,
   createId,
   createPresalesRound,
+  isLegacyUntouchedPresalesRound,
   projectManifestSchema,
   type Locale,
+  type GeneralTemplateFormat,
   type PresalesGeneratedFile,
   type PresalesAnalysisResult,
   type PresalesParticipant,
@@ -130,18 +159,30 @@ import {
   type TenderAnalysisResult,
   type BidGeneratedFile,
   type TenderOutputFormat,
+  type HandoverDepartment,
+  type HandoverDeliverableType,
+  type HandoverResponseMethod,
+  type HandoverTask,
+  type HandoverTaskStatus,
 } from "../lib/workspace-schema";
 
 type View = WorkspaceView;
 type Props = { initialView?: View };
 type ModelInvocation = { settings: ReturnType<typeof readModelSettings>; apiKey: string };
+type PendingDirectoryChange = { handle: DirectoryHandleLike; mode: "select" | "migrate" };
+const isUsableProjectDirectory = (handle: DirectoryHandleLike | null): handle is DirectoryHandleLike => Boolean(
+  handle
+  && typeof handle.getDirectoryHandle === "function"
+  && typeof handle.getFileHandle === "function",
+);
 type PendingModelAction =
   | { kind: "customer-analysis"; roundId: string; anchorId: string }
   | { kind: "response-files"; roundId: string; actionIds: string[]; anchorId: string }
   | { kind: "tender-ocr"; sourceIds: string[]; anchorId: string }
   | { kind: "tender-analysis"; anchorId: string }
   | { kind: "tender-comparison"; anchorId: string }
-  | { kind: "bid-output"; bidFileId: string; anchorId: string };
+  | { kind: "bid-output"; bidFileId: string; anchorId: string }
+  | { kind: "handover-task-split"; anchorId: string };
 
 const copy = {
   zh: {
@@ -152,9 +193,9 @@ const copy = {
     requirements: "招标",
     bid: "投标",
     handover: "中标交底",
-    outputs: "输出与 Skills",
+    outputs: "输出文件",
     reset: "新建项目",
-    projectPath: "项目路径",
+    projectPath: "项目设置",
     projectName: "项目名称",
     customer: "客户代称",
     industry: "行业",
@@ -175,25 +216,20 @@ const copy = {
     baselineDiff: "售前与招标差异",
     commitments: "承诺基线",
     handoverList: "技术交底与项目协同",
-    audit: "发布前检查",
     directory: "选择工作区目录",
     sync: "写入目录",
     rescan: "重新扫描",
     importZip: "导入项目 ZIP",
-    exportZip: "导出完整 ZIP",
-    includeSources: "在 ZIP 中包含原始来源文件",
-    taskPrompt: "生成 Skill 执行任务",
-    copyTask: "复制任务",
-    skillDownloads: "Skills 下载",
-    skillHint: "网页不会自动启动 Codex。复制任务后，在 Codex 中调用对应 Skill，再回到这里重新扫描项目。",
-    noIssues: "当前没有阻断问题。",
     pending: "待批准",
     evidenced: "已绑定证据",
     approved: "已批准",
     total: "招标要求",
     saved: "已保存到浏览器",
-    folderSaved: "项目及正式输出已写入本地工作区。",
+    folderSaved: "项目状态及目录结构已写入本地工作区。",
     projectPathSaved: "项目已保存到所选路径。",
+    projectPathRequired: "未设置项目路径，请先在“项目设置”中选择项目路径。",
+    projectPathRequiredHint: "当前操作已取消。关闭提示后仍停留在原来的页面和位置，现有内容不会丢失。",
+    acknowledge: "知道了",
     loaded: "已载入项目。",
     invalid: "文件结构无法识别，请检查项目版本或文件类型。",
     parsing: "正在解析来源文件",
@@ -210,10 +246,6 @@ const copy = {
     commitmentEyebrow: "承诺基线",
     handoverEyebrow: "交底 / 交付",
     localWorkspaceEyebrow: "本地工作区",
-    formalOutputsEyebrow: "正式输出",
-    codexEyebrow: "CODEX / 本地 SKILL",
-    downloadsEyebrow: "下载 / V1.0.0",
-    qualityEyebrow: "质量检查",
     darkMode: "切换到深色模式",
     lightMode: "切换到浅色模式",
     remove: "删除",
@@ -227,9 +259,9 @@ const copy = {
     requirements: "Tender",
     bid: "Bid",
     handover: "Award handover",
-    outputs: "Outputs and Skills",
+    outputs: "Output files",
     reset: "New project",
-    projectPath: "Project folder",
+    projectPath: "Project settings",
     projectName: "Project name",
     customer: "Customer alias",
     industry: "Industry",
@@ -250,25 +282,20 @@ const copy = {
     baselineDiff: "Presales and tender differences",
     commitments: "Commitment baseline",
     handoverList: "Technical handover and project actions",
-    audit: "Pre-release checks",
     directory: "Choose workspace folder",
     sync: "Write to folder",
     rescan: "Rescan",
     importZip: "Import project ZIP",
-    exportZip: "Export complete ZIP",
-    includeSources: "Include original sources in ZIP",
-    taskPrompt: "Create Skill task",
-    copyTask: "Copy task",
-    skillDownloads: "Skill downloads",
-    skillHint: "The site does not start Codex. Copy a task, run the matching Skill in Codex, then rescan the project here.",
-    noIssues: "No blocking issues found.",
     pending: "Pending approval",
     evidenced: "With evidence",
     approved: "Approved",
     total: "Tender requirements",
     saved: "Saved in browser",
-    folderSaved: "Project and formal outputs were written to the local workspace.",
+    folderSaved: "Project state and folder structure were written to the local workspace.",
     projectPathSaved: "Project saved to the selected folder.",
+    projectPathRequired: "No project folder is set. Choose one in Project settings first.",
+    projectPathRequiredHint: "The current action was cancelled. Closing this message keeps the current page, position, and existing content.",
+    acknowledge: "Got it",
     loaded: "Project loaded.",
     invalid: "The file structure is not supported. Check its project version or file type.",
     parsing: "Parsing source files",
@@ -285,10 +312,6 @@ const copy = {
     commitmentEyebrow: "COMMITMENT BASELINE",
     handoverEyebrow: "HANDOVER / DELIVERY",
     localWorkspaceEyebrow: "LOCAL WORKSPACE",
-    formalOutputsEyebrow: "FORMAL OUTPUTS",
-    codexEyebrow: "CODEX / LOCAL SKILL",
-    downloadsEyebrow: "DOWNLOADS / V1.0.0",
-    qualityEyebrow: "QUALITY GATE",
     darkMode: "Switch to dark mode",
     lightMode: "Switch to light mode",
     remove: "Remove",
@@ -296,16 +319,16 @@ const copy = {
   },
 } as const;
 
+const emptyPresalesMigrationKey = "cavwic-empty-presales-default-v1";
+
 const viewMeta: Array<{ id: View; icon: typeof BriefcaseBusiness; code: string }> = [
   { id: "presales", icon: BriefcaseBusiness, code: "01" },
   { id: "requirements", icon: FileSearch, code: "02" },
   { id: "bid", icon: PackageCheck, code: "03" },
+  { id: "handover", icon: ClipboardCheck, code: "04" },
+  { id: "outputs", icon: FileOutput, code: "05" },
 ];
 
-const responseLabels = {
-  zh: { confirmed: "已证实满足", conditional: "条件满足", custom: "需定制", missing_evidence: "缺少证据", unsupported: "不满足" },
-  en: { confirmed: "Confirmed", conditional: "Conditional", custom: "Customization required", missing_evidence: "Evidence missing", unsupported: "Unsupported" },
-} as const;
 const actionStatusLabels = {
   zh: { open: "待处理", working: "进行中", blocked: "受阻", done: "已完成" },
   en: { open: "Open", working: "Working", blocked: "Blocked", done: "Done" },
@@ -317,10 +340,6 @@ const projectStageLabels = {
 const diffRelationLabels = {
   zh: { added: "新增", changed: "已修改", unchanged: "未变化", removed: "已删除", conflict: "有冲突" },
   en: { added: "Added", changed: "Changed", unchanged: "Unchanged", removed: "Removed", conflict: "Conflict" },
-} as const;
-const issueAreaLabels = {
-  zh: { project: "项目", source: "来源", requirement: "要求", evidence: "证据", action: "任务", deliverable: "交付物", section: "章节" },
-  en: { project: "Project", source: "Source", requirement: "Requirement", evidence: "Evidence", action: "Action", deliverable: "Deliverable", section: "Section" },
 } as const;
 const preprocessStatusLabels = {
   zh: { uploaded: "已上传，等待预处理", ready: "上传并预处理完成", "needs-ocr": "存在无法识别内容", skipped: "仅上传，未处理", processing: "正在识别", failed: "识别失败" },
@@ -338,6 +357,54 @@ const participantCategoryLabels = {
   zh: { customer: "客户", "third-party": "第三方", internal: "公司内人员" },
   en: { customer: "Customer", "third-party": "Third party", internal: "Internal" },
 } as const;
+const handoverDeliverableLabels: Record<Locale, Record<HandoverDeliverableType, string>> = {
+  zh: { document: "文件", "drawing-bom": "图纸 / BOM", software: "软件包 / 配置", "test-record": "测试记录", training: "培训材料", "site-action": "现场实施", approval: "审批确认", other: "其他" },
+  en: { document: "Document", "drawing-bom": "Drawing / BOM", software: "Software / config", "test-record": "Test record", training: "Training material", "site-action": "Site work", approval: "Approval", other: "Other" },
+};
+const handoverResponseLabels: Record<Locale, Record<HandoverResponseMethod, string>> = {
+  zh: { file: "上传文件", report: "文字报告", path: "软件包 / 路径", confirmation: "状态确认", mixed: "混合响应" },
+  en: { file: "File upload", report: "Written report", path: "Package / path", confirmation: "Status confirmation", mixed: "Mixed response" },
+};
+const handoverTaskStatusLabels: Record<Locale, Record<HandoverTaskStatus, string>> = {
+  zh: { pending: "待处理", working: "进行中", blocked: "受阻", submitted: "已提交", accepted: "已验收" },
+  en: { pending: "Pending", working: "In progress", blocked: "Blocked", submitted: "Submitted", accepted: "Accepted" },
+};
+
+type WorkspaceOutputModuleGroup = { path: string; label: string; files: WorkspaceOutputFile[] };
+type WorkspaceOutputStageGroup = { path: string; label: string; modules: WorkspaceOutputModuleGroup[]; files: WorkspaceOutputFile[] };
+
+function groupWorkspaceOutputFiles(files: WorkspaceOutputFile[]): WorkspaceOutputStageGroup[] {
+  const stages = new Map<string, Map<string, WorkspaceOutputFile[]>>();
+  for (const file of files) {
+    const parts = file.relativePath.split("/");
+    const stagePath = parts[0];
+    const modulePath = parts.slice(0, -1).join("/");
+    const modules = stages.get(stagePath) || new Map<string, WorkspaceOutputFile[]>();
+    const moduleFiles = modules.get(modulePath) || [];
+    moduleFiles.push(file);
+    modules.set(modulePath, moduleFiles);
+    stages.set(stagePath, modules);
+  }
+  return [...stages.entries()].map(([stagePath, modules]) => {
+    const moduleGroups = [...modules.entries()].map(([modulePath, moduleFiles]) => ({
+      path: modulePath,
+      label: modulePath.split("/").slice(1).join(" / ") || stagePath,
+      files: moduleFiles,
+    }));
+    return {
+      path: stagePath,
+      label: stagePath,
+      modules: moduleGroups,
+      files: moduleGroups.flatMap((module) => module.files),
+    };
+  });
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(bytes < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
 
 function selectedCustomerSourceIds(round: PresalesRound): string[] {
   return round.selectedRequirementSourceIds ?? round.requirementSourceIds;
@@ -350,12 +417,9 @@ function uniqueAnalysisResultName(baseName: string, results: PresalesAnalysisRes
   return `${baseName}-${index}`;
 }
 
-function safeDirectoryName(value: string): string {
-  return value.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, "").slice(0, 80);
-}
-
 function sourceIsReferenced(project: ProjectManifest, sourceId: string): boolean {
-  return project.enterpriseContext.sourceIds.includes(sourceId)
+  return Object.values(project.generalTemplates).includes(sourceId)
+    || project.enterpriseContext.sourceIds.includes(sourceId)
     || project.tenderSourceIds.includes(sourceId)
     || project.tenderClarificationRounds.some((round) => round.sourceIds.includes(sourceId))
     || project.tenderAnalysis.templateSourceIds.includes(sourceId)
@@ -366,6 +430,8 @@ function sourceIsReferenced(project: ProjectManifest, sourceId: string): boolean
     || project.bidFileChecklist.some((item) => item.templateSourceIds.includes(sourceId)
       || item.referenceSourceIds.includes(sourceId)
       || item.generatedFiles.some((file) => file.sourceId === sourceId || file.referenceSourceIds.includes(sourceId) || file.templateSourceIds.includes(sourceId)))
+    || project.handover.awardSourceIds.includes(sourceId)
+    || project.handover.tasks.some((task) => task.sourceIds.includes(sourceId) || task.responseSourceIds.includes(sourceId))
     || project.requirements.some((item) => item.sourceRef?.documentId === sourceId)
     || project.evidence.some((item) => item.sourceRef?.documentId === sourceId)
     || project.presalesRounds.some((round) => round.requirementSourceIds.includes(sourceId)
@@ -384,9 +450,104 @@ function Field({ label, children, wide = false }: { label: string; children: Rea
   return <label className={wide ? "field wide" : "field"}><span>{label}</span>{children}</label>;
 }
 
+function LocalizedTemporalInput({
+  type,
+  locale,
+  value,
+  ariaLabel,
+  onChange,
+}: {
+  type: "date" | "datetime-local";
+  locale: Locale;
+  value: string;
+  ariaLabel: string;
+  onChange(value: string): void;
+}) {
+  const datePlaceholder = locale === "zh" ? "年 / 月 / 日" : "MM / DD / YYYY";
+  const placeholder = type === "date" ? datePlaceholder : `${datePlaceholder}  HH:MM`;
+  const [datePart = "", timePart = ""] = value.split("T");
+  const [year = "", month = "", day = ""] = datePart.split("-");
+  const formattedDate = year && month && day
+    ? (locale === "zh" ? `${year}/${month}/${day}` : `${month}/${day}/${year}`)
+    : "";
+  const displayValue = formattedDate && type === "datetime-local"
+    ? `${formattedDate}  ${timePart.slice(0, 5)}`
+    : formattedDate;
+
+  const showPicker = (input: HTMLInputElement) => {
+    try { input.showPicker?.(); } catch { /* The native input remains usable when showPicker is unavailable. */ }
+  };
+
+  return <div className={`localized-temporal-input${value ? "" : " empty"}`}>
+    <input
+      type={type}
+      lang={locale === "zh" ? "zh-CN" : "en-US"}
+      aria-label={ariaLabel}
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      onClick={(event) => showPicker(event.currentTarget)}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        showPicker(event.currentTarget);
+      }}
+    />
+    <span aria-hidden="true">{displayValue || placeholder}</span>
+    <CalendarDays aria-hidden="true" size={18}/>
+  </div>;
+}
+
+function ConfirmableTextarea({
+  fieldId,
+  label,
+  locale,
+  value,
+  rows,
+  placeholder,
+  ariaLabel,
+  wide = false,
+  confirmed,
+  onChange,
+  onConfirmedChange,
+}: {
+  fieldId: string;
+  label: string;
+  locale: Locale;
+  value: string;
+  rows: number;
+  placeholder?: string;
+  ariaLabel?: string;
+  wide?: boolean;
+  confirmed: boolean;
+  onChange(value: string): void;
+  onConfirmedChange(confirmed: boolean): void;
+}) {
+  const [controlsVisible, setControlsVisible] = useState(false);
+  const textarea = useRef<HTMLTextAreaElement>(null);
+  const focusTextarea = () => window.requestAnimationFrame(() => textarea.current?.focus());
+  const edit = () => { onConfirmedChange(false); focusTextarea(); };
+  const clear = () => { onChange(""); onConfirmedChange(false); focusTextarea(); };
+
+  return <div className={`field confirmable-field${wide ? " wide" : ""}`}>
+    <span>{label}</span>
+    <div
+      data-field-id={fieldId}
+      className={`confirmable-textarea${confirmed ? " confirmed" : ""}${controlsVisible ? " controls-visible" : ""}`}
+      onPointerMove={(event) => setControlsVisible(event.clientY - event.currentTarget.getBoundingClientRect().top <= 46)}
+      onPointerLeave={() => setControlsVisible(false)}
+    >
+      <textarea ref={textarea} rows={rows} aria-label={ariaLabel || label} placeholder={placeholder} readOnly={confirmed} value={value} onChange={(event) => onChange(event.target.value)}/>
+      <div className="textarea-controls" role="toolbar" aria-label={locale === "zh" ? "多行文本编辑操作" : "Multiline text editing actions"}>
+        <button type="button" disabled={confirmed} aria-label={locale === "zh" ? "确认文本内容" : "Confirm text"} title={locale === "zh" ? "确认" : "Confirm"} onClick={() => onConfirmedChange(true)}><Check size={15}/></button>
+        <button type="button" disabled={!confirmed} aria-label={locale === "zh" ? "修改文本内容" : "Edit text"} title={locale === "zh" ? "修改" : "Edit"} onClick={edit}><Pencil size={15}/></button>
+        <button type="button" aria-label={locale === "zh" ? "清空文本内容" : "Clear text"} title={locale === "zh" ? "清空" : "Clear"} onClick={clear}><Eraser size={15}/></button>
+      </div>
+    </div>
+  </div>;
+}
+
 export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [locale, setLocale] = useState<Locale>("zh");
-  const [theme, setTheme] = useState<"light" | "dark">("light");
   const [view, setView] = useState<View>(initialView);
   const [project, setProject] = useState<ProjectManifest>(() => createEmptyProject("zh"));
   const [ready, setReady] = useState(false);
@@ -395,8 +556,12 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [selectedRequirementId, setSelectedRequirementId] = useState("");
   const [directoryHandle, setDirectoryHandle] = useState<DirectoryHandleLike | null>(null);
-  const [includeSources, setIncludeSources] = useState(false);
   const [taskKind, setTaskKind] = useState<"workflow" | "extract" | "bid">("workflow");
+  const [outputDirectoryHandle, setOutputDirectoryHandle] = useState<DirectoryHandleLike | null>(null);
+  const [workspaceOutputFiles, setWorkspaceOutputFiles] = useState<WorkspaceOutputFile[]>([]);
+  const [selectedOutputPaths, setSelectedOutputPaths] = useState<Set<string>>(new Set());
+  const [outputFilesLoading, setOutputFilesLoading] = useState(false);
+  const [outputPathRequired, setOutputPathRequired] = useState(false);
   const [sourceFiles, setSourceFiles] = useState<Map<string, File>>(new Map());
   const [generatedBlobs, setGeneratedBlobs] = useState<Map<string, Blob>>(new Map());
   const [generatingActionId, setGeneratingActionId] = useState("");
@@ -407,6 +572,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [expandedTenderSourceId, setExpandedTenderSourceId] = useState("");
   const [expandedTenderResultId, setExpandedTenderResultId] = useState("");
   const [expandedBidFileId, setExpandedBidFileId] = useState("");
+  const [expandedHandoverTaskId, setExpandedHandoverTaskId] = useState("");
   const [tenderKeywordDraft, setTenderKeywordDraft] = useState("");
   const [ocrChoiceSourceIds, setOcrChoiceSourceIds] = useState<string[] | null>(null);
   const [ocrProgress, setOcrProgress] = useState<Record<string, number>>({});
@@ -415,15 +581,119 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [participantDrafts, setParticipantDrafts] = useState<Record<string, { name: string; category: PresalesParticipant["category"] }>>({});
   const [returnState, setReturnState] = useState<ModelActionReturnState | null>(null);
   const [pendingModelAction, setPendingModelAction] = useState<PendingModelAction | null>(null);
+  const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
+  const [pendingDirectoryChange, setPendingDirectoryChange] = useState<PendingDirectoryChange | null>(null);
+  const [projectPathRequired, setProjectPathRequired] = useState(false);
   const sourceInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
   const modelChoicePrimary = useRef<HTMLButtonElement>(null);
+  const projectRef = useRef(project);
+  const sourceFilesRef = useRef(sourceFiles);
+  const knownSourceFilesRef = useRef<Map<string, File>>(new Map());
+  const historyRef = useRef(new WorkspaceHistory(3));
+  const busyRef = useRef(busy);
   const t = copy[locale];
   const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+
+  projectRef.current = project;
+  sourceFilesRef.current = sourceFiles;
+  busyRef.current = busy;
+  for (const [sourceId, file] of sourceFiles) knownSourceFilesRef.current.set(sourceId, file);
+
+  const publishHistoryState = () => {
+    window.dispatchEvent(new CustomEvent("cavwic-history-state", {
+      detail: { ...historyRef.current.state, busy: busyRef.current },
+    }));
+  };
+
+  const recordHistory = (previous: ProjectManifest, group = "") => {
+    historyRef.current.record(previous, group);
+    window.queueMicrotask(publishHistoryState);
+  };
+
+  const projectFilesForSnapshot = (snapshot: ProjectManifest) => new Map(
+    snapshot.sources
+      .map((source) => [source.id, knownSourceFilesRef.current.get(source.id)] as const)
+      .filter((entry): entry is readonly [string, File] => Boolean(entry[1])),
+  );
+
+  const applyHistory = async (direction: HistoryDirection) => {
+    if (busyRef.current) return;
+    const current = projectRef.current;
+    const target = historyRef.current.peek(direction);
+    if (!target) return;
+    const currentSourceIds = new Set(current.sources.map((source) => source.id));
+    const restoredSource = target.sources.find((source) => !currentSourceIds.has(source.id) && !knownSourceFilesRef.current.has(source.id));
+    if (restoredSource) {
+      setNotice(locale === "zh" ? `无法恢复“${restoredSource.name}”，当前会话中缺少文件副本。` : `Cannot restore “${restoredSource.name}” because its session copy is unavailable.`);
+      return;
+    }
+
+    const targetFiles = projectFilesForSnapshot(target);
+    busyRef.current = true;
+    setBusy(true);
+    publishHistoryState();
+    try {
+      if (isUsableProjectDirectory(directoryHandle)) {
+        await synchronizeProjectHistoryToDirectory(directoryHandle, current, target, targetFiles);
+      }
+      const targetSourceIds = new Set(target.sources.map((source) => source.id));
+      for (const source of current.sources) {
+        if (!targetSourceIds.has(source.id)) await removePersistedSourceFile(current.id, source.id).catch(() => undefined);
+      }
+      await persistSourceFiles(target.id, targetFiles).catch(() => undefined);
+      const applied = historyRef.current.apply(direction, current);
+      if (!applied) return;
+      persistProjectSnapshot(applied);
+      projectRef.current = applied;
+      sourceFilesRef.current = targetFiles;
+      setProject(applied);
+      setSourceFiles(targetFiles);
+      setSelectedSourceId("");
+      setSelectedRequirementId("");
+      setSelectedActionIds(new Set());
+      setExpandedAnalysisId("");
+      setExpandedTenderSourceId("");
+      setExpandedTenderResultId("");
+      setExpandedBidFileId("");
+      setExpandedHandoverTaskId("");
+      setNotice(direction === "undo"
+        ? (locale === "zh" ? "已撤销上一步操作。" : "The last action was undone.")
+        : (locale === "zh" ? "已恢复上一步操作。" : "The last action was restored."));
+    } catch {
+      setNotice(locale === "zh"
+        ? "撤销或恢复失败，项目目录中的文件未能完整同步。"
+        : "Undo or redo failed because the project files could not be synchronized.");
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+      window.queueMicrotask(publishHistoryState);
+    }
+  };
 
   const issues = useMemo(() => validateProject(project, locale), [project, locale]);
   const coverage = useMemo(() => requirementCoverage(project), [project]);
   const currentStage = useMemo(() => inferProjectStage(project), [project]);
+  const outputGroups = useMemo(() => groupWorkspaceOutputFiles(workspaceOutputFiles), [workspaceOutputFiles]);
+
+  const refreshWorkspaceOutputFiles = async (handle = directoryHandle) => {
+    if (!isUsableProjectDirectory(handle)) {
+      setWorkspaceOutputFiles([]);
+      setSelectedOutputPaths(new Set());
+      return;
+    }
+    setOutputFilesLoading(true);
+    try {
+      const files = await listWorkspaceOutputFiles(handle);
+      const available = new Set(files.map((file) => file.relativePath));
+      setWorkspaceOutputFiles(files);
+      setSelectedOutputPaths((current) => new Set([...current].filter((path) => available.has(path))));
+    } catch {
+      setNotice(locale === "zh" ? "无法读取项目文件，请重新授权项目路径。" : "Project files could not be read. Authorize the project folder again.");
+    } finally {
+      setOutputFilesLoading(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -437,20 +707,41 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const stored = localStorage.getItem("cavwic-solution-workspace");
       if (stored) {
         const parsed = projectManifestSchema.safeParse(JSON.parse(stored));
-        if (parsed.success) nextProject = syncProjectStage(localizeBuiltInProject(parsed.data, nextLocale));
+        if (parsed.success) {
+          nextProject = syncProjectStage(localizeBuiltInProject(parsed.data, nextLocale));
+          if (nextProject.handover.awardNotes === "Award scope confirmed for local review.") {
+            nextProject = {
+              ...nextProject,
+              handover: { ...nextProject.handover, awardNotes: "" },
+            };
+          }
+        }
       }
-      const handle = await restoreWorkspaceDirectory().catch(() => null);
+      if (!localStorage.getItem(emptyPresalesMigrationKey)) {
+        if (nextProject.presalesRounds.length === 1 && isLegacyUntouchedPresalesRound(nextProject.presalesRounds[0])) {
+          nextProject = { ...nextProject, presalesRounds: [] };
+        }
+        localStorage.setItem(emptyPresalesMigrationKey, "1");
+      }
+      const restoredHandle = await restoreWorkspaceDirectory().catch(() => null);
+      const restoredOutputHandle = await restoreProjectOutputDirectory().catch(() => null);
+      const handle = isUsableProjectDirectory(restoredHandle) ? restoredHandle : null;
+      const outputHandle = isUsableProjectDirectory(restoredOutputHandle) ? restoredOutputHandle : null;
       const persistedFiles = await restoreSourceFiles(nextProject.id).catch(() => new Map<string, File>());
       if (handle) {
         const directoryFiles = await loadSourceFilesFromDirectory(handle, nextProject).catch(() => new Map<string, File>());
         for (const [id, file] of directoryFiles) if (!persistedFiles.has(id)) persistedFiles.set(id, file);
       }
       if (cancelled) return;
+      historyRef.current.reset();
+      projectRef.current = nextProject;
+      sourceFilesRef.current = persistedFiles;
+      knownSourceFilesRef.current = new Map(persistedFiles);
       setLocale(nextLocale);
-      setTheme(nextTheme);
       setProject(nextProject);
       setSourceFiles(persistedFiles);
       setDirectoryHandle(handle);
+      setOutputDirectoryHandle(outputHandle);
       document.documentElement.dataset.locale = nextLocale;
       document.documentElement.lang = nextLocale === "zh" ? "zh-CN" : "en";
       document.documentElement.dataset.theme = nextTheme;
@@ -471,11 +762,52 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           setExpandedBidFileId(pendingReturn.targetIds[0]);
           setResumeModelAction({ kind: "bid-output", bidFileId: pendingReturn.targetIds[0], anchorId: pendingReturn.anchorId });
         }
+        else if (pendingReturn.action === "handover-task-split") setResumeModelAction({ kind: "handover-task-split", anchorId: pendingReturn.anchorId });
       }
       setFilesHydrated(true);
       setReady(true);
     })();
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!ready) return;
+    const undo = () => { void applyHistory("undo"); };
+    const redo = () => { void applyHistory("redo"); };
+    const publish = () => publishHistoryState();
+    window.addEventListener("cavwic-history-undo", undo);
+    window.addEventListener("cavwic-history-redo", redo);
+    window.addEventListener("cavwic-history-request", publish);
+    publishHistoryState();
+    return () => {
+      window.removeEventListener("cavwic-history-undo", undo);
+      window.removeEventListener("cavwic-history-redo", redo);
+      window.removeEventListener("cavwic-history-request", publish);
+    };
+  }, [directoryHandle, locale, ready]);
+
+  useEffect(() => {
+    if (ready) publishHistoryState();
+  }, [busy, ready]);
+
+  useEffect(() => {
+    if (!ready || view !== "outputs") return;
+    void refreshWorkspaceOutputFiles();
+  }, [directoryHandle, ready, view]);
+
+  useEffect(() => {
+    const handleLocaleChange = (event: Event) => {
+      const next = (event as CustomEvent<Locale>).detail;
+      if (next !== "zh" && next !== "en") return;
+      setLocale(next);
+      setProject((current) => {
+        const nextProject = syncProjectStage(localizeBuiltInProject(current, next));
+        try { localStorage.setItem("cavwic-solution-workspace", JSON.stringify(nextProject)); } catch { /* The project directory remains the fallback. */ }
+        return nextProject;
+      });
+    };
+    window.addEventListener("cavwic-locale-change", handleLocaleChange);
+    return () => window.removeEventListener("cavwic-locale-change", handleLocaleChange);
   }, []);
 
   useEffect(() => {
@@ -490,8 +822,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   }, [ready, returnState, view]);
 
   useEffect(() => {
-    if (pendingModelAction || ocrChoiceSourceIds) modelChoicePrimary.current?.focus();
-  }, [ocrChoiceSourceIds, pendingModelAction]);
+    if (pendingModelAction || ocrChoiceSourceIds || projectPathRequired || outputPathRequired) modelChoicePrimary.current?.focus();
+  }, [ocrChoiceSourceIds, outputPathRequired, pendingModelAction, projectPathRequired]);
 
   useEffect(() => {
     if (!ready) return;
@@ -506,7 +838,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   }, [project, locale, ready, t.saved]);
 
   useEffect(() => {
-    if (!ready || !directoryHandle) return;
+    if (!ready || !isUsableProjectDirectory(directoryHandle)) return;
     const timer = window.setTimeout(() => {
       void saveProjectStateToDirectory(directoryHandle, project, sourceFiles)
         .then(() => setNotice(t.projectPathSaved))
@@ -530,36 +862,243 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       // The authorized project directory remains the fallback when browser storage is full.
     }
   };
-  const commitProject = (snapshot: ProjectManifest) => {
+  const commitProject = (snapshot: ProjectManifest, historyGroup = "", trackHistory = true) => {
+    const previous = projectRef.current;
+    if (trackHistory && previous !== snapshot) recordHistory(previous, historyGroup);
     persistProjectSnapshot(snapshot);
+    projectRef.current = snapshot;
     setProject(snapshot);
   };
-  const updateProject = <K extends keyof ProjectManifest>(key: K, value: ProjectManifest[K]) => setProject((current) => {
+  const updateProject = <K extends keyof ProjectManifest>(key: K, value: ProjectManifest[K], historyGroup = typeof value === "string" ? `project:${String(key)}` : "") => {
+    const current = projectRef.current;
     const nextProject = syncProjectStage({ ...current, [key]: value, updatedAt: new Date().toISOString() });
+    recordHistory(current, historyGroup);
     persistProjectSnapshot(nextProject);
-    return nextProject;
-  });
-  const updatePresalesRound = (id: string, patch: Partial<PresalesRound>) => updateProject("presalesRounds", project.presalesRounds.map((item) => item.id === id ? { ...item, ...patch } : item));
-  const updateBidFile = (id: string, patch: Partial<BidFileChecklistItem>) => updateProject("bidFileChecklist", project.bidFileChecklist.map((item) => item.id === id ? { ...item, ...patch } : item));
+    projectRef.current = nextProject;
+    setProject(nextProject);
+  };
+  const patchHistoryGroup = (scope: string, patch: object) => Object.values(patch).every((value) => typeof value === "string")
+    ? `${scope}:${Object.keys(patch).sort().join("+")}`
+    : "";
+  const updatePresalesRound = (id: string, patch: Partial<PresalesRound>) => {
+    const current = projectRef.current;
+    updateProject("presalesRounds", current.presalesRounds.map((item) => item.id === id ? { ...item, ...patch } : item), patchHistoryGroup(`presales:${id}`, patch));
+  };
+  const updateBidFile = (id: string, patch: Partial<BidFileChecklistItem>) => {
+    const current = projectRef.current;
+    updateProject("bidFileChecklist", current.bidFileChecklist.map((item) => item.id === id ? { ...item, ...patch } : item), patchHistoryGroup(`bid:${id}`, patch));
+  };
+  const updateHandover = (patch: Partial<ProjectManifest["handover"]>, historyGroup = patchHistoryGroup("handover", patch)) => {
+    const current = projectRef.current;
+    updateProject("handover", { ...current.handover, ...patch }, historyGroup);
+  };
+  const updateHandoverDepartment = (id: string, patch: Partial<HandoverDepartment>) => {
+    const current = projectRef.current;
+    updateHandover(
+      { departments: current.handover.departments.map((item) => item.id === id ? { ...item, ...patch } : item) },
+      patchHistoryGroup(`handover-department:${id}`, patch),
+    );
+  };
+  const updateHandoverTask = (id: string, patch: Partial<HandoverTask>) => {
+    const current = projectRef.current;
+    updateHandover(
+      { tasks: current.handover.tasks.map((item) => item.id === id ? { ...item, ...patch } : item) },
+      patchHistoryGroup(`handover-task:${id}`, patch),
+    );
+  };
+  const setTextFieldConfirmed = (fieldId: string, confirmed: boolean) => updateProject(
+    "confirmedTextFields",
+    confirmed
+      ? [...new Set([...projectRef.current.confirmedTextFields, fieldId])]
+      : projectRef.current.confirmedTextFields.filter((item) => item !== fieldId),
+  );
 
-  const switchLocale = () => {
-    const next = locale === "zh" ? "en" : "zh";
-    setLocale(next);
-    localStorage.setItem("cavwic-lab-locale", next);
-    document.documentElement.dataset.locale = next;
-    document.documentElement.lang = next === "zh" ? "zh-CN" : "en";
-    window.dispatchEvent(new CustomEvent("cavwic-locale-change", { detail: next }));
-    setProject((current) => {
-      const nextProject = syncProjectStage(localizeBuiltInProject(current, next));
-      persistProjectSnapshot(nextProject);
-      return nextProject;
+  const requireProjectDirectory = () => {
+    if (isUsableProjectDirectory(directoryHandle)) return true;
+    setProjectPathRequired(true);
+    return false;
+  };
+
+  const guardFileImport = (event: ReactMouseEvent<HTMLDivElement>) => {
+    if (isUsableProjectDirectory(directoryHandle)) return;
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const fileLabel = target.closest("label");
+    if (!fileLabel?.querySelector('input[type="file"]')) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setProjectPathRequired(true);
+  };
+
+  const openGuardedFilePicker = (input: HTMLInputElement | null) => {
+    if (!requireProjectDirectory()) return;
+    input?.click();
+  };
+
+  const uniqueImportedFileName = (relativeDirectory: string, originalName: string, pendingPaths: Set<string>) => {
+    const usedPaths = new Set(projectRef.current.sources.map((source) => source.workspacePath).filter(Boolean));
+    for (const path of pendingPaths) usedPaths.add(path);
+    if (!usedPaths.has(`${relativeDirectory}/${originalName}`)) return originalName;
+    const dot = originalName.lastIndexOf(".");
+    const stem = dot > 0 ? originalName.slice(0, dot) : originalName;
+    const extension = dot > 0 ? originalName.slice(dot) : "";
+    let index = 2;
+    while (usedPaths.has(`${relativeDirectory}/${stem}(${index})${extension}`)) index += 1;
+    return `${stem}(${index})${extension}`;
+  };
+
+  const prepareImportedSources = async (
+    items: Array<{ source: SourceDocument; file: File }>,
+    relativeDirectory: string,
+  ) => {
+    const nextFiles = new Map(sourceFilesRef.current);
+    const addedSources: SourceDocument[] = [];
+    const resolvedSources: SourceDocument[] = [];
+    const filesToStore: File[] = [];
+    const pendingPaths = new Set<string>();
+    for (const item of items) {
+      const duplicate = [...projectRef.current.sources, ...addedSources].find((source) => source.sha256 === item.source.sha256);
+      if (duplicate) {
+        resolvedSources.push(duplicate);
+        continue;
+      }
+      const storedName = uniqueImportedFileName(relativeDirectory, item.file.name, pendingPaths);
+      const storedFile = storedName === item.file.name
+        ? item.file
+        : new File([item.file], storedName, { type: item.file.type, lastModified: item.file.lastModified });
+      const source: SourceDocument = {
+        ...item.source,
+        name: storedName,
+        workspacePath: isUsableProjectDirectory(directoryHandle) ? `${relativeDirectory}/${storedName}` : "",
+      };
+      pendingPaths.add(`${relativeDirectory}/${storedName}`);
+      addedSources.push(source);
+      resolvedSources.push(source);
+      filesToStore.push(storedFile);
+      nextFiles.set(source.id, storedFile);
+    }
+    if (isUsableProjectDirectory(directoryHandle) && filesToStore.length) {
+      await saveWorkspaceFilesToDirectory(directoryHandle, relativeDirectory, filesToStore);
+    }
+    return { addedSources, resolvedSources, nextFiles };
+  };
+
+  const saveExistingSourceNote = async (relativeDirectory: string, sources: SourceDocument[]) => {
+    if (!isUsableProjectDirectory(directoryHandle)) return;
+    const references = sources.filter((source) => !source.workspacePath.startsWith(`${relativeDirectory}/`));
+    if (!references.length) return;
+    await saveWorkspaceTextFiles(directoryHandle, relativeDirectory, [{ name: "说明文档.txt", content: sourceReferenceDocument(references) }]);
+  };
+
+  const workspaceSourcePath = (source: SourceDocument) => source.workspacePath || `projects/${projectRef.current.id}/sources/${source.name}`;
+
+  const addPresalesRound = async () => {
+    const current = projectRef.current;
+    const roundIndex = current.presalesRounds.length;
+    if (isUsableProjectDirectory(directoryHandle)) {
+      try {
+        await ensureWorkspaceDirectoryPath(directoryHandle, presalesRoundDirectory(roundIndex));
+      } catch {
+        setNotice(locale === "zh" ? "无法创建本轮沟通目录，请重新授权项目路径。" : "The communication folder could not be created. Reauthorize the project folder.");
+        return;
+      }
+    }
+    updateProject("presalesRounds", [...current.presalesRounds, createPresalesRound(locale, roundIndex + 1)]);
+  };
+
+  const addTenderClarificationRound = async () => {
+    const current = projectRef.current;
+    const roundIndex = current.tenderClarificationRounds.length;
+    if (isUsableProjectDirectory(directoryHandle)) {
+      try {
+        await ensureWorkspaceDirectoryPath(directoryHandle, tenderClarificationDirectory(roundIndex));
+      } catch {
+        setNotice(locale === "zh" ? "无法创建澄清目录，请重新授权项目路径。" : "The clarification folder could not be created. Reauthorize the project folder.");
+        return;
+      }
+    }
+    updateProject("tenderClarificationRounds", [...current.tenderClarificationRounds, {
+      id: createId("clarification"),
+      title: locale === "zh" ? `第${chineseInteger(roundIndex + 1)}次澄清` : `Clarification ${roundIndex + 1}`,
+      occurredAt: "",
+      sourceIds: [],
+      selectedSourceIds: [],
+    }]);
+  };
+
+  const commitStructuralRemoval = async (detachedProject: ProjectManifest, candidateSourceIds: string[], onCommitted?: () => void) => {
+    const removableIds = [...new Set(candidateSourceIds)].filter((sourceId) => !sourceIsReferenced(detachedProject, sourceId));
+    const removableSet = new Set(removableIds);
+    const nextProject = syncProjectStage({
+      ...detachedProject,
+      sources: detachedProject.sources.filter((source) => !removableSet.has(source.id)),
+      updatedAt: new Date().toISOString(),
+    });
+    const nextFiles = new Map(sourceFilesRef.current);
+    removableIds.forEach((sourceId) => nextFiles.delete(sourceId));
+    setBusy(true);
+    try {
+      if (isUsableProjectDirectory(directoryHandle)) {
+        await synchronizeProjectHistoryToDirectory(directoryHandle, projectRef.current, nextProject, nextFiles);
+      }
+      for (const sourceId of removableIds) await removePersistedSourceFile(projectRef.current.id, sourceId).catch(() => undefined);
+      commitProject(nextProject);
+      setSourceFiles(nextFiles);
+      onCommitted?.();
+    } catch {
+      setNotice(locale === "zh" ? "目录或文件删除失败，项目内容未更改。" : "The folder or files could not be removed. The project was not changed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removePresalesRound = async (round: PresalesRound) => {
+    const candidateSourceIds = [
+      ...round.requirementSourceIds,
+      ...round.referenceSourceIds,
+      ...round.templateSourceIds,
+      ...round.actions.flatMap((action) => action.templateSourceIds),
+      ...round.analysisResults.map((result) => result.sourceId),
+      ...round.generatedFiles.map((file) => file.sourceId),
+    ];
+    await commitStructuralRemoval({
+      ...projectRef.current,
+      presalesRounds: projectRef.current.presalesRounds.filter((item) => item.id !== round.id),
+    }, candidateSourceIds);
+  };
+
+  const removeTenderClarificationRound = async (roundId: string) => {
+    const round = projectRef.current.tenderClarificationRounds.find((item) => item.id === roundId);
+    if (!round) return;
+    await commitStructuralRemoval({
+      ...projectRef.current,
+      tenderClarificationRounds: projectRef.current.tenderClarificationRounds.filter((item) => item.id !== roundId),
+    }, round.sourceIds);
+  };
+
+  const removeBidChecklistItem = async (item: BidFileChecklistItem) => {
+    await commitStructuralRemoval({
+      ...projectRef.current,
+      bidFileChecklist: projectRef.current.bidFileChecklist.filter((candidate) => candidate.id !== item.id),
+    }, [
+      ...item.templateSourceIds,
+      ...item.referenceSourceIds,
+      ...item.generatedFiles.map((file) => file.sourceId),
+    ], () => {
+      if (expandedBidFileId === item.id) setExpandedBidFileId("");
     });
   };
-  const switchTheme = () => {
-    const next = theme === "light" ? "dark" : "light";
-    setTheme(next);
-    localStorage.setItem("cavwic-lab-theme", next);
-    document.documentElement.dataset.theme = next;
+
+  const removeHandoverTask = async (task: HandoverTask) => {
+    await commitStructuralRemoval({
+      ...projectRef.current,
+      handover: {
+        ...projectRef.current.handover,
+        tasks: projectRef.current.handover.tasks.filter((candidate) => candidate.id !== task.id),
+      },
+    }, task.responseSourceIds, () => {
+      if (expandedHandoverTaskId === task.id) setExpandedHandoverTaskId("");
+    });
   };
 
   const importTenderFiles = async (files: FileList | null, target: { kind: "tender" } | { kind: "clarification"; roundId: string } | { kind: "analysis-template" | "comparison-template" }) => {
@@ -567,10 +1106,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     setNotice(`${t.parsing}…`);
     try {
-      const parsed: SourceDocument[] = [];
-      const nextFiles = new Map(sourceFiles);
+      const parsed: Array<{ source: SourceDocument; file: File }> = [];
       for (const file of Array.from(files)) {
-        const rawSource = await parseSourceFile(file);
+        const templateImport = target.kind === "analysis-template" || target.kind === "comparison-template";
+        const templateFormat = tenderTemplateFileFormat(file.name);
+        if (templateImport && !templateFormat) throw new Error("UNSUPPORTED_TEMPLATE_FORMAT");
+        const rawSource = templateImport
+          ? await createFormatOnlyTemplateSource(file, templateFormat as GeneralTemplateFormat | "md")
+          : await parseSourceFile(file);
         const automaticallyPrepared = target.kind !== "tender" && hasReadableSourceText(rawSource);
         const source: SourceDocument = automaticallyPrepared ? {
           ...rawSource,
@@ -578,11 +1121,21 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           preprocessedAt: new Date().toISOString(),
           preprocessMessage: locale === "zh" ? "上传并预处理完成" : "Uploaded and preprocessed",
         } : rawSource;
-        parsed.push(source);
-        nextFiles.set(source.id, file);
+        parsed.push({ source, file });
       }
-      const sourceIds = parsed.map((source) => source.id);
-      let nextProject: ProjectManifest = { ...project, sources: [...project.sources, ...parsed], updatedAt: new Date().toISOString() };
+      const clarificationIndex = target.kind === "clarification"
+        ? Math.max(0, project.tenderClarificationRounds.findIndex((round) => round.id === target.roundId))
+        : 0;
+      const relativeDirectory = target.kind === "tender"
+        ? `${WORKSPACE_MODULE_DIRECTORIES.tenderFiles}/导入文件`
+        : target.kind === "clarification"
+          ? `${tenderClarificationDirectory(clarificationIndex)}/导入文件`
+          : target.kind === "analysis-template"
+            ? `${WORKSPACE_MODULE_DIRECTORIES.tenderAnalysis}/导入文件/模板文件`
+            : `${WORKSPACE_MODULE_DIRECTORIES.tenderComparison}/导入文件/模板文件`;
+      const prepared = await prepareImportedSources(parsed, relativeDirectory);
+      const sourceIds = prepared.resolvedSources.map((source) => source.id);
+      let nextProject: ProjectManifest = { ...project, sources: [...project.sources, ...prepared.addedSources], updatedAt: new Date().toISOString() };
       if (target.kind === "tender") nextProject = {
         ...nextProject,
         tenderSourceIds: [...new Set([...project.tenderSourceIds, ...sourceIds])],
@@ -600,11 +1153,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       else nextProject = { ...nextProject, tenderComparison: { ...project.tenderComparison, templateSourceIds: [...new Set([...project.tenderComparison.templateSourceIds, ...sourceIds])] } };
       nextProject = syncProjectStage(nextProject);
       commitProject(nextProject);
-      setSourceFiles(nextFiles);
-      setSelectedSourceId(parsed[0]?.id || "");
-      await persistSourceFiles(project.id, new Map(parsed.map((source) => [source.id, nextFiles.get(source.id) as File]))).catch(() => undefined);
-      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
-      setNotice(locale === "zh" ? `${parsed.length} 个文件已导入。` : `${parsed.length} file(s) imported.`);
+      setSourceFiles(prepared.nextFiles);
+      setSelectedSourceId(prepared.resolvedSources[0]?.id || "");
+      await persistSourceFiles(project.id, new Map(prepared.addedSources.map((source) => [source.id, prepared.nextFiles.get(source.id) as File]))).catch(() => undefined);
+      if (directoryHandle) {
+        await saveExistingSourceNote(relativeDirectory, prepared.resolvedSources);
+        await saveProjectStateToDirectory(directoryHandle, nextProject, prepared.nextFiles);
+      }
+      setNotice(locale === "zh" ? `${prepared.resolvedSources.length} 个文件已导入。` : `${prepared.resolvedSources.length} file(s) imported.`);
     } catch {
       setNotice(t.invalid);
     } finally {
@@ -618,17 +1174,30 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     setNotice(`${t.parsing}…`);
     try {
-      const parsed = [];
-      const nextFiles = new Map(sourceFiles);
+      const parsed: Array<{ source: SourceDocument; file: File }> = [];
       for (const file of Array.from(files)) {
-        const source = await parseSourceFile(file);
-        parsed.push(source);
-        nextFiles.set(source.id, file);
+        const templateImport = target.kind === "templates" || target.kind === "action-templates";
+        const templateFormat = templateFileFormat(file.name);
+        if (templateImport && !templateFormat) throw new Error("UNSUPPORTED_TEMPLATE_FORMAT");
+        const source = templateImport
+          ? await createFormatOnlyTemplateSource(file, templateFormat as GeneralTemplateFormat | "md")
+          : await parseSourceFile(file);
+        parsed.push({ source, file });
       }
-      const sourceIds = parsed.map((source) => source.id);
+      const roundIndex = Math.max(0, project.presalesRounds.findIndex((round) => round.id === target.roundId));
+      const roundDirectory = presalesRoundDirectory(roundIndex);
+      const relativeDirectory = target.kind === "requirements"
+        ? `${roundDirectory}/客户附件`
+        : target.kind === "references"
+          ? `${roundDirectory}/参考文件`
+          : target.kind === "templates"
+            ? `${roundDirectory}/补充文件/需求分析模板`
+            : `${roundDirectory}/补充文件/响应文件模板`;
+      const prepared = await prepareImportedSources(parsed, relativeDirectory);
+      const sourceIds = prepared.resolvedSources.map((source) => source.id);
       const nextProject = syncProjectStage({
         ...project,
-        sources: [...project.sources, ...parsed],
+        sources: [...project.sources, ...prepared.addedSources],
         presalesRounds: project.presalesRounds.map((round) => {
           if (round.id !== target.roundId) return round;
           if (target.kind === "requirements") return {
@@ -655,9 +1224,11 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         updatedAt: new Date().toISOString(),
       } as ProjectManifest);
       commitProject(nextProject);
-      setSourceFiles(nextFiles);
-      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
-      setNotice(locale === "zh" ? `${parsed.length} 个文件已导入。` : `${parsed.length} file(s) imported.`);
+      setSourceFiles(prepared.nextFiles);
+      await persistSourceFiles(project.id, new Map(prepared.addedSources.map((source) => [source.id, prepared.nextFiles.get(source.id) as File]))).catch(() => undefined);
+      await saveExistingSourceNote(relativeDirectory, prepared.resolvedSources);
+      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, prepared.nextFiles);
+      setNotice(locale === "zh" ? `${prepared.resolvedSources.length} 个文件已导入。` : `${prepared.resolvedSources.length} file(s) imported.`);
     } catch {
       setNotice(t.invalid);
     } finally {
@@ -707,8 +1278,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     commitProject(nextProject);
     setSourceFiles(nextFiles);
     if (directoryHandle) {
-      if (removeSource && source) await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => undefined);
+      if (removeSource && source) await removeWorkspaceFileFromRelativePath(directoryHandle, workspaceSourcePath(source)).catch(() => undefined);
       await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+      await synchronizeDerivedWorkspaceArtifacts(directoryHandle, nextProject).catch(() => undefined);
     }
   };
 
@@ -849,7 +1421,11 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setGeneratingActionId(actions.length === 1 ? `task-${actions[0].id}` : `batch-task-${round.id}`);
     setBusy(true);
     try {
-      const tasks = actions.map((action) => buildCodexPresalesTask(project, round, action, locale));
+      const tasks = actions.map((action) => {
+        const target = getActionResponseTarget(round, action);
+        const templates = target.format ? resolvedTemplateSources(target.format, action.selectedTemplateSourceIds) : [];
+        return buildCodexPresalesTask(project, round, action, locale, templates);
+      });
       if (supportsDirectoryAccess()) {
         const outputDirectory = await chooseTaskOutputDirectory(directoryHandle);
         for (const task of tasks) await saveTaskFileToDirectory(outputDirectory, task.name, task.content);
@@ -880,7 +1456,90 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const current = sourceFiles.get(source.id);
     if (current) return current;
     if (!directoryHandle) return null;
-    return readWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => null);
+    return readWorkspaceFileFromRelativePath(directoryHandle, workspaceSourcePath(source)).catch(() => null);
+  };
+
+  const resolvedTemplateSources = (format: TenderOutputFormat, specificIds: string[]): SourceDocument[] => {
+    return resolveFormatTemplateSources(project, format, specificIds);
+  };
+
+  const resolvePrimaryTemplateFile = async (templates: SourceDocument[]): Promise<File | undefined> => {
+    if (!templates[0]) return undefined;
+    return (await resolveSourceFile(templates[0])) || undefined;
+  };
+
+  const uploadGeneralTemplate = async (format: GeneralTemplateFormat, file?: File) => {
+    if (!file) return;
+    if (tenderTemplateFileFormat(file.name) !== format) {
+      alertBidTemplateMismatch(file.name, format);
+      return;
+    }
+    setBusy(true);
+    try {
+      const rawSource = await createFormatOnlyTemplateSource(file, format);
+      const formatFolder = format === "docx" ? "Word" : format === "xlsx" ? "Excel" : "PPT";
+      const templateDirectory = `${WORKSPACE_MODULE_DIRECTORIES.generalTemplates}/${formatFolder}`;
+      const source: SourceDocument = {
+        ...rawSource,
+        workspacePath: isUsableProjectDirectory(directoryHandle) ? `${templateDirectory}/${file.name}` : "",
+      };
+      const key = `${format}SourceId` as const;
+      const previousId = project.generalTemplates[key];
+      const previousSource = project.sources.find((candidate) => candidate.id === previousId);
+      const withTemplate = syncProjectStage({
+        ...project,
+        generalTemplates: { ...project.generalTemplates, [key]: source.id },
+        sources: [...project.sources, source],
+        updatedAt: new Date().toISOString(),
+      });
+      const removePrevious = previousId && !sourceIsReferenced(withTemplate, previousId);
+      const nextProject = removePrevious
+        ? { ...withTemplate, sources: withTemplate.sources.filter((candidate) => candidate.id !== previousId) }
+        : withTemplate;
+      const nextFiles = new Map(sourceFiles).set(source.id, file);
+      if (removePrevious) nextFiles.delete(previousId);
+      commitProject(nextProject);
+      setSourceFiles(nextFiles);
+      await persistSourceFiles(project.id, new Map([[source.id, file]])).catch(() => undefined);
+      if (removePrevious) await removePersistedSourceFile(project.id, previousId).catch(() => undefined);
+      if (directoryHandle) {
+        if (removePrevious && previousSource) {
+          await removeWorkspaceFileFromRelativePath(directoryHandle, workspaceSourcePath(previousSource)).catch(() => undefined);
+          await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/templates/general/${previousSource.name}`).catch(() => undefined);
+        }
+        await saveWorkspaceFilesToDirectory(directoryHandle, templateDirectory, [file]);
+        await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
+      }
+      setNotice(locale === "zh" ? `${format.toUpperCase()} 通用格式模板已保存。` : `${format.toUpperCase()} general format template saved.`);
+    } catch {
+      setNotice(locale === "zh" ? "通用模板上传失败，请检查文件格式。" : "General template upload failed. Check the file format.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeGeneralTemplate = async (format: GeneralTemplateFormat) => {
+    const key = `${format}SourceId` as const;
+    const sourceId = project.generalTemplates[key];
+    if (!sourceId) return;
+    const source = project.sources.find((candidate) => candidate.id === sourceId);
+    const detached = syncProjectStage({
+      ...project,
+      generalTemplates: { ...project.generalTemplates, [key]: "" },
+      updatedAt: new Date().toISOString(),
+    });
+    const removeSource = !sourceIsReferenced(detached, sourceId);
+    const nextProject = removeSource ? { ...detached, sources: detached.sources.filter((candidate) => candidate.id !== sourceId) } : detached;
+    const nextFiles = new Map(sourceFiles);
+    if (removeSource) nextFiles.delete(sourceId);
+    commitProject(nextProject);
+    setSourceFiles(nextFiles);
+    if (removeSource) await removePersistedSourceFile(project.id, sourceId).catch(() => undefined);
+    if (directoryHandle && source) {
+      if (removeSource) await removeWorkspaceFileFromRelativePath(directoryHandle, workspaceSourcePath(source)).catch(() => undefined);
+      await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/templates/general/${source.name}`).catch(() => undefined);
+      await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+    }
   };
 
   const openSourceFile = async (source: SourceDocument) => {
@@ -1036,9 +1695,12 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     for (const id of removableIds) {
       const source = project.sources.find((item) => item.id === id);
       await removePersistedSourceFile(project.id, id).catch(() => undefined);
-      if (directoryHandle && source) await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => undefined);
+      if (directoryHandle && source) await removeWorkspaceFileFromRelativePath(directoryHandle, workspaceSourcePath(source)).catch(() => undefined);
     }
-    if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+    if (directoryHandle) {
+      await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+      await synchronizeDerivedWorkspaceArtifacts(directoryHandle, nextProject).catch(() => undefined);
+    }
   };
 
   const tenderAnalysisInputs = (kind: "analysis" | "comparison") => {
@@ -1058,7 +1720,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         window.alert(locale === "zh" ? "请先选择招标要求分析的文件格式。" : "Select an output format for tender analysis.");
         return null;
       }
-      const templates = project.tenderAnalysis.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+      const templates = resolvedTemplateSources(project.tenderAnalysis.outputFormat, project.tenderAnalysis.selectedTemplateSourceIds);
       return { tenderSources, clarificationSources, presalesSources: [] as SourceDocument[], templates, outputFormat: project.tenderAnalysis.outputFormat };
     }
     const presalesSources = project.tenderComparison.selectedPresalesSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
@@ -1070,7 +1732,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       window.alert(locale === "zh" ? "请先选择对比结果的文件格式。" : "Select an output format for the comparison.");
       return null;
     }
-    const templates = project.tenderComparison.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+    const templates = resolvedTemplateSources(project.tenderComparison.outputFormat, project.tenderComparison.selectedTemplateSourceIds);
     return { tenderSources, clarificationSources, presalesSources, templates, outputFormat: project.tenderComparison.outputFormat };
   };
 
@@ -1112,12 +1774,28 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
       const extracted = extractTenderStructuredData(draft.content);
       const resultName = nextTenderResultName(kind);
-      const generated = await createTenderGeneratedFile(extracted.content, resultName, inputs.outputFormat);
+      const templateFile = await resolvePrimaryTemplateFile(inputs.templates);
+      const generated = await createTenderGeneratedFile(extracted.content, resultName, inputs.outputFormat, templateFile);
       const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
       const parsedOutput = await parseSourceFile(generatedFile);
-      const source: SourceDocument = { ...parsedOutput, preprocessStatus: "ready", preprocessedAt: new Date().toISOString(), preprocessMessage: locale === "zh" ? "模型分析结果" : "Model analysis result" };
-      const folderName = safeDirectoryName(locale === "zh" ? "投标阶段-招标文件分析" : "Tender-File-Analysis");
-      const relativePath = directoryHandle ? await saveAnalysisFileToDirectory(directoryHandle, project, folderName, generated.name, generated.blob) : `downloads/${generated.name}`;
+      const outputDirectory = `${kind === "analysis" ? WORKSPACE_MODULE_DIRECTORIES.tenderAnalysis : WORKSPACE_MODULE_DIRECTORIES.tenderComparison}/生成文件`;
+      const relativePath = isUsableProjectDirectory(directoryHandle)
+        ? `${outputDirectory}/${generated.name}`
+        : `downloads/${generated.name}`;
+      if (isUsableProjectDirectory(directoryHandle)) {
+        await saveWorkspaceFilesToDirectory(directoryHandle, outputDirectory, [generatedFile]);
+        if (kind === "analysis") {
+          await saveWorkspaceTextFiles(directoryHandle, outputDirectory, analysisSupplementText(project.tenderAnalysis.keywords, project.tenderAnalysis.analysisRequirements));
+        }
+        await saveExistingSourceNote(outputDirectory, [...inputs.tenderSources, ...inputs.clarificationSources, ...inputs.presalesSources, ...inputs.templates]);
+      }
+      const source: SourceDocument = {
+        ...parsedOutput,
+        workspacePath: isUsableProjectDirectory(directoryHandle) ? relativePath : "",
+        preprocessStatus: "ready",
+        preprocessedAt: new Date().toISOString(),
+        preprocessMessage: locale === "zh" ? "模型分析结果" : "Model analysis result",
+      };
       const sourceIds = [...inputs.tenderSources, ...inputs.clarificationSources, ...(kind === "comparison" ? inputs.presalesSources : [])].map((item) => item.id);
       const record: TenderAnalysisResult = {
         id: createId("tender-analysis"),
@@ -1167,7 +1845,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       setSourceFiles(nextFiles);
       setGeneratedBlobs((current) => new Map(current).set(record.id, generated.blob));
       await persistSourceFiles(project.id, new Map([[source.id, generatedFile]])).catch(() => undefined);
-      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
+      if (directoryHandle) {
+        for (const item of nextProject.bidFileChecklist) await ensureWorkspaceDirectoryPath(directoryHandle, bidItemDirectory(item.title));
+        await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
+      }
       else downloadBlob(generated.name, generated.blob);
       setNotice(locale === "zh" ? `${resultName}已生成。` : `${resultName} generated.`);
     } catch {
@@ -1213,10 +1894,12 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     if (directoryHandle) {
       await removeWorkspaceFileFromRelativePath(directoryHandle, result.relativePath).catch(() => undefined);
       await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+      await synchronizeDerivedWorkspaceArtifacts(directoryHandle, nextProject).catch(() => undefined);
     }
   };
 
   const startTenderAnalysis = (kind: "analysis" | "comparison") => {
+    if (!requireProjectDirectory()) return;
     if (!tenderAnalysisInputs(kind)) return;
     const invocation = configuredModel();
     if (invocation) {
@@ -1263,9 +1946,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       window.alert(locale === "zh" ? "请先选择分析结果的文件格式。" : "Select an output format for the analysis result.");
       return null;
     }
-    const selectedTemplates = round.selectedTemplateSourceIds
-      .map((id) => project.sources.find((source) => source.id === id))
-      .filter((source): source is NonNullable<typeof source> => Boolean(source));
+    const selectedTemplates = resolvedTemplateSources(round.analysisOutputFormat, round.selectedTemplateSourceIds);
     const mismatch = selectedTemplates.find((source) => templateFileFormat(source.name) !== round.analysisOutputFormat);
     if (mismatch) {
       alertTemplateMismatch(mismatch.name, round.analysisOutputFormat);
@@ -1286,18 +1967,22 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     try {
       const prompt = buildCustomerNeedsAnalysisPrompt(project, round, selectedSources, selectedTemplates, locale);
       const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
-      const baseName = analysisResultBaseName(round.keywords, locale);
-      const resultName = uniqueAnalysisResultName(baseName, round.analysisResults);
-      const generated = await createGeneratedFile(draft.content, resultName, outputFormat);
-      const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
-      const source = await parseSourceFile(generatedFile);
       const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
-      const folderName = safeDirectoryName(locale === "zh"
-        ? `售前阶段-第${roundIndex + 1}次沟通-分析要求`
-        : `Presales-Communication-${roundIndex + 1}-Analysis`);
-      const relativePath = directoryHandle
-        ? await saveAnalysisFileToDirectory(directoryHandle, project, folderName, generated.name, generated.blob)
+      const baseName = locale === "zh" ? `第${chineseInteger(roundIndex + 1)}次沟通需求分析` : `Communication ${roundIndex + 1} requirements analysis`;
+      const resultName = uniqueAnalysisResultName(baseName, round.analysisResults);
+      const templateFile = await resolvePrimaryTemplateFile(selectedTemplates);
+      const generated = await createGeneratedFile(draft.content, resultName, outputFormat, templateFile);
+      const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
+      const analysisDirectory = `${presalesRoundDirectory(roundIndex)}/需求分析`;
+      const relativePath = isUsableProjectDirectory(directoryHandle)
+        ? (await saveWorkspaceFilesToDirectory(directoryHandle, analysisDirectory, [generatedFile]))[0]
         : `downloads/${generated.name}`;
+      if (isUsableProjectDirectory(directoryHandle)) {
+        const supplements = analysisSupplementText(round.keywords, round.analysisRequirements);
+        if (supplements.length) await saveWorkspaceTextFiles(directoryHandle, analysisDirectory, supplements);
+        await saveExistingSourceNote(analysisDirectory, [...selectedSources, ...selectedTemplates]);
+      }
+      const source = { ...await parseSourceFile(generatedFile), workspacePath: isUsableProjectDirectory(directoryHandle) ? relativePath : "" };
       const record: PresalesAnalysisResult = {
         id: createId("analysis"),
         name: resultName,
@@ -1311,7 +1996,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         prompt: round.analysisRequirements,
         keywords: [...round.keywords],
         sourceIds: [...sourceIds],
-        templateSourceIds: [...round.selectedTemplateSourceIds],
+        templateSourceIds: selectedTemplates.map((source) => source.id),
       };
       const nextFiles = new Map(sourceFiles).set(source.id, generatedFile);
       const nextProject = syncProjectStage({
@@ -1370,6 +2055,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     if (directoryHandle) {
       await removeWorkspaceFileFromRelativePath(directoryHandle, result.relativePath).catch(() => undefined);
       await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+      await synchronizeDerivedWorkspaceArtifacts(directoryHandle, nextProject).catch(() => undefined);
     }
   };
 
@@ -1384,16 +2070,28 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const nextFiles = new Map(sourceFiles);
       const nextBlobs = new Map(generatedBlobs);
       const pendingWrites: Array<{ name: string; blob: Blob }> = [];
+      const referencedSourceIds = new Set<string>();
+      const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
+      const generationDirectory = `${presalesRoundDirectory(roundIndex)}/生成文件`;
 
       for (const action of actions) {
         const currentRound = nextProject.presalesRounds.find((item) => item.id === round.id) || round;
         const target = getActionResponseTarget(currentRound, action);
         if (!target.name || !target.format) throw new Error("RESPONSE_FILE_CONFIG_REQUIRED");
+        const templates = resolvedTemplateSources(target.format, action.selectedTemplateSourceIds);
+        const templateFile = await resolvePrimaryTemplateFile(templates);
         const prompt = buildPresalesPrompt(nextProject, currentRound, locale, action);
         const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
-        const generated = await createGeneratedFile(draft.content, target.name, target.format);
+        const generated = await createGeneratedFile(draft.content, target.name, target.format, templateFile);
         const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
-        const source = await parseSourceFile(generatedFile);
+        const relativePath = isUsableProjectDirectory(directoryHandle)
+          ? (await saveWorkspaceFilesToDirectory(directoryHandle, generationDirectory, [generatedFile]))[0]
+          : `downloads/${generated.name}`;
+        if (isUsableProjectDirectory(directoryHandle)) {
+          const metadataName = `${safeWorkspaceName(generated.name.replace(/\.[^.]+$/, ""))}-文件信息.txt`;
+          await saveWorkspaceTextFiles(directoryHandle, generationDirectory, [{ name: metadataName, content: responseFileMetadata(action, generated.name) }]);
+        }
+        const source = { ...await parseSourceFile(generatedFile), workspacePath: isUsableProjectDirectory(directoryHandle) ? relativePath : "" };
         const record: PresalesGeneratedFile = {
           id: createId("generated"),
           name: generated.name,
@@ -1402,12 +2100,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           provider: draft.provider,
           model: draft.model,
           sourceId: source.id,
-          relativePath: `projects/${project.id}/outputs/${generated.name}`,
+          relativePath,
           actionId: action.id,
         };
         nextFiles.set(source.id, generatedFile);
         nextBlobs.set(record.id, generated.blob);
         pendingWrites.push({ name: generated.name, blob: generated.blob });
+        for (const sourceId of [...selectedCustomerSourceIds(currentRound), ...currentRound.referenceSourceIds, ...action.selectedTemplateSourceIds]) referencedSourceIds.add(sourceId);
         nextProject = syncProjectStage({
           ...nextProject,
           sources: [...nextProject.sources, source],
@@ -1417,7 +2116,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       }
 
       if (directoryHandle) {
-        for (const file of pendingWrites) await saveGeneratedFileToDirectory(directoryHandle, nextProject, file.name, file.blob);
+        const references = [...referencedSourceIds].map((sourceId) => nextProject.sources.find((source) => source.id === sourceId)).filter((source): source is SourceDocument => Boolean(source));
+        await saveExistingSourceNote(generationDirectory, references);
         await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
       }
       commitProject(nextProject);
@@ -1457,6 +2157,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const startCustomerAnalysis = (round: PresalesRound) => {
+    if (!requireProjectDirectory()) return;
     const invocation = configuredModel();
     if (invocation) {
       void analyzeCustomerSources(round, invocation);
@@ -1466,6 +2167,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const startPresalesFiles = (round: PresalesRound, actions: PresalesRoundAction[]) => {
+    if (!requireProjectDirectory()) return;
     const invocation = configuredModel();
     if (invocation) {
       void generatePresalesFiles(round, actions, invocation);
@@ -1487,22 +2189,26 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     setNotice(`${t.parsing}…`);
     try {
-      const parsed: SourceDocument[] = [];
-      const nextFiles = new Map(sourceFiles);
+      const parsed: Array<{ source: SourceDocument; file: File }> = [];
       for (const file of Array.from(files)) {
-        const rawSource = await parseSourceFile(file);
+        const templateFormat = tenderTemplateFileFormat(file.name);
+        if (kind === "template" && !templateFormat) throw new Error("UNSUPPORTED_TEMPLATE_FORMAT");
+        const rawSource = kind === "template"
+          ? await createFormatOnlyTemplateSource(file, templateFormat as GeneralTemplateFormat | "md")
+          : await parseSourceFile(file);
         const source: SourceDocument = hasReadableSourceText(rawSource) ? {
           ...rawSource,
           preprocessStatus: "ready",
           preprocessedAt: new Date().toISOString(),
           preprocessMessage: locale === "zh" ? "上传并预处理完成" : "Uploaded and preprocessed",
         } : rawSource;
-        parsed.push(source);
-        nextFiles.set(source.id, file);
+        parsed.push({ source, file });
       }
-      const sourceIds = parsed.map((source) => source.id);
+      const relativeDirectory = `${bidItemDirectory(item.title)}/导入文件/${kind === "template" ? "模板文件" : "参考资料"}`;
+      const prepared = await prepareImportedSources(parsed, relativeDirectory);
+      const sourceIds = prepared.resolvedSources.map((source) => source.id);
       const mismatched = kind === "template" && item.outputFormat
-        ? parsed.filter((source) => tenderTemplateFileFormat(source.name) !== item.outputFormat)
+        ? prepared.resolvedSources.filter((source) => tenderTemplateFileFormat(source.name) !== item.outputFormat)
         : [];
       const selectableIds = sourceIds.filter((id) => !mismatched.some((source) => source.id === id));
       const nextItem: BidFileChecklistItem = kind === "template" ? {
@@ -1516,16 +2222,19 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       };
       const nextProject = syncProjectStage({
         ...project,
-        sources: [...project.sources, ...parsed],
+        sources: [...project.sources, ...prepared.addedSources],
         bidFileChecklist: project.bidFileChecklist.map((candidate) => candidate.id === item.id ? nextItem : candidate),
         updatedAt: new Date().toISOString(),
       });
       commitProject(nextProject);
-      setSourceFiles(nextFiles);
-      await persistSourceFiles(project.id, new Map(parsed.map((source) => [source.id, nextFiles.get(source.id) as File]))).catch(() => undefined);
-      if (directoryHandle) await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles);
+      setSourceFiles(prepared.nextFiles);
+      await persistSourceFiles(project.id, new Map(prepared.addedSources.map((source) => [source.id, prepared.nextFiles.get(source.id) as File]))).catch(() => undefined);
+      if (directoryHandle) {
+        await saveExistingSourceNote(relativeDirectory, prepared.resolvedSources);
+        await saveProjectStateToDirectory(directoryHandle, nextProject, prepared.nextFiles);
+      }
       if (mismatched[0] && item.outputFormat) alertBidTemplateMismatch(mismatched[0].name, item.outputFormat);
-      setNotice(locale === "zh" ? `${parsed.length} 个文件已导入。` : `${parsed.length} file(s) imported.`);
+      setNotice(locale === "zh" ? `${prepared.resolvedSources.length} 个文件已导入。` : `${prepared.resolvedSources.length} file(s) imported.`);
     } catch {
       setNotice(locale === "zh" ? "文件导入失败，请检查文件格式。" : "Import failed. Check the file format.");
     } finally {
@@ -1559,8 +2268,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     commitProject(nextProject);
     setSourceFiles(nextFiles);
     if (directoryHandle) {
-      if (removeSource && source) await removeWorkspaceFileFromRelativePath(directoryHandle, `projects/${project.id}/sources/${source.name}`).catch(() => undefined);
+      if (removeSource && source) await removeWorkspaceFileFromRelativePath(directoryHandle, workspaceSourcePath(source)).catch(() => undefined);
       await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+      await synchronizeDerivedWorkspaceArtifacts(directoryHandle, nextProject).catch(() => undefined);
     }
   };
 
@@ -1594,7 +2304,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       window.alert(locale === "zh" ? "请先选择输出格式。" : "Select an output format first.");
       return null;
     }
-    const templates = item.selectedTemplateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+    const templates = resolvedTemplateSources(item.outputFormat, item.selectedTemplateSourceIds);
     const mismatch = templates.find((source) => tenderTemplateFileFormat(source.name) !== item.outputFormat);
     if (mismatch) {
       alertBidTemplateMismatch(mismatch.name, item.outputFormat);
@@ -1619,19 +2329,28 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     try {
       const prompt = buildBidFilePrompt(project, item, inputs.references, inputs.templates, locale);
       const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
-      const generated = await createTenderGeneratedFile(draft.content, item.title, inputs.outputFormat);
+      const templateFile = await resolvePrimaryTemplateFile(inputs.templates);
+      const generated = await createTenderGeneratedFile(draft.content, item.title, inputs.outputFormat, templateFile);
       const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
       const parsedOutput = await parseSourceFile(generatedFile);
+      const outputDirectory = `${bidItemDirectory(item.title)}/生成文件`;
+      const relativePath = isUsableProjectDirectory(directoryHandle)
+        ? `${outputDirectory}/${generated.name}`
+        : `downloads/${generated.name}`;
+      if (isUsableProjectDirectory(directoryHandle)) {
+        await saveWorkspaceFilesToDirectory(directoryHandle, outputDirectory, [generatedFile]);
+        if (item.detailRequirements.trim()) {
+          await saveWorkspaceTextFiles(directoryHandle, outputDirectory, [{ name: "细节要求.txt", content: `${item.detailRequirements.trim()}\n` }]);
+        }
+        await saveExistingSourceNote(outputDirectory, [...inputs.references, ...inputs.templates]);
+      }
       const source: SourceDocument = {
         ...parsedOutput,
+        workspacePath: isUsableProjectDirectory(directoryHandle) ? relativePath : "",
         preprocessStatus: "ready",
         preprocessedAt: new Date().toISOString(),
         preprocessMessage: locale === "zh" ? "模型生成文件" : "Model-generated file",
       };
-      const folderName = safeDirectoryName("投标阶段-投标文件输出");
-      const relativePath = directoryHandle
-        ? await saveAnalysisFileToDirectory(directoryHandle, project, folderName, generated.name, generated.blob)
-        : `downloads/${generated.name}`;
       const record: BidGeneratedFile = {
         id: createId("bid-output"),
         name: generated.name,
@@ -1668,6 +2387,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const startBidFileGeneration = (item: BidFileChecklistItem) => {
+    if (!requireProjectDirectory()) return;
     const invocation = configuredModel();
     if (invocation) {
       void generateBidFile(item, invocation);
@@ -1712,13 +2432,270 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     if (directoryHandle) {
       await removeWorkspaceFileFromRelativePath(directoryHandle, record.relativePath).catch(() => undefined);
       await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+      await synchronizeDerivedWorkspaceArtifacts(directoryHandle, nextProject).catch(() => undefined);
     }
+  };
+
+  const handoverBidRecords = () => project.bidFileChecklist.flatMap((item) => item.generatedFiles.map((record) => ({ item, record })));
+
+  const selectedHandoverSources = (requireReadable = false) => {
+    const awardIds = project.handover.selectedAwardSourceIds;
+    const bidIds = handoverBidRecords()
+      .map(({ record }) => record.sourceId)
+      .filter((id) => !project.handover.excludedBidSourceIds.includes(id));
+    const awardSources = awardIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+    const bidSources = bidIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+    if (!project.handover.departments.length || project.handover.departments.some((department) => !department.name.trim())) {
+      window.alert(locale === "zh" ? "请先添加部门并填写部门名称。" : "Add at least one department and provide every department name.");
+      return null;
+    }
+    if (!awardSources.length && !bidSources.length && !project.handover.awardNotes.trim() && !project.handover.temporaryChanges.trim()) {
+      window.alert(locale === "zh" ? "请先选择中标资料、投标文件，或填写中标说明与临时变更。" : "Select award materials or bid files, or add award notes or temporary changes first.");
+      return null;
+    }
+    if (requireReadable) {
+      const unreadable = [...awardSources, ...bidSources].find((source) => source.requiresOcr || !source.segments.some((segment) => segment.text.trim()));
+      if (unreadable) {
+        window.alert(locale === "zh"
+          ? `“${unreadable.name}”无法直接提取文本，请先转为可读取文件，或选择“否，输出任务”交由 Codex 处理原文件。`
+          : `“${unreadable.name}” has no extractable text. Convert it first, or choose “No, output task” so Codex can process the original file.`);
+        return null;
+      }
+    }
+    return { awardSources, bidSources };
+  };
+
+  const importHandoverAwardFiles = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy(true);
+    setNotice(`${t.parsing}…`);
+    try {
+      const parsed: Array<{ source: SourceDocument; file: File }> = [];
+      for (const file of Array.from(files)) {
+        const raw = await parseSourceFile(file);
+        const source = hasReadableSourceText(raw) ? {
+          ...raw,
+          preprocessStatus: "ready" as const,
+          preprocessedAt: new Date().toISOString(),
+          preprocessMessage: locale === "zh" ? "上传并可读取" : "Uploaded and readable",
+        } : raw;
+        parsed.push({ source, file });
+      }
+      const relativeDirectory = `${WORKSPACE_MODULE_DIRECTORIES.awardSupplement}/导入文件`;
+      const prepared = await prepareImportedSources(parsed, relativeDirectory);
+      const sourceIds = prepared.resolvedSources.map((source) => source.id);
+      const nextProject = syncProjectStage({
+        ...project,
+        sources: [...project.sources, ...prepared.addedSources],
+        handover: {
+          ...project.handover,
+          awardSourceIds: [...new Set([...project.handover.awardSourceIds, ...sourceIds])],
+          selectedAwardSourceIds: [...new Set([...project.handover.selectedAwardSourceIds, ...sourceIds])],
+        },
+        updatedAt: new Date().toISOString(),
+      });
+      commitProject(nextProject);
+      setSourceFiles(prepared.nextFiles);
+      await persistSourceFiles(project.id, new Map(prepared.addedSources.map((source) => [source.id, prepared.nextFiles.get(source.id) as File]))).catch(() => undefined);
+      if (directoryHandle) {
+        await saveExistingSourceNote(relativeDirectory, prepared.resolvedSources);
+        await saveProjectStateToDirectory(directoryHandle, nextProject, prepared.nextFiles);
+      }
+      setNotice(locale === "zh" ? `${prepared.resolvedSources.length} 个中标资料已导入。` : `${prepared.resolvedSources.length} award file(s) imported.`);
+    } catch {
+      setNotice(locale === "zh" ? "中标资料导入失败，请检查文件格式。" : "Award file import failed. Check the file format.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeHandoverSource = async (sourceId: string, target: "award" | "response", taskId = "") => {
+    const nextHandover = target === "award" ? {
+      ...project.handover,
+      awardSourceIds: project.handover.awardSourceIds.filter((id) => id !== sourceId),
+      selectedAwardSourceIds: project.handover.selectedAwardSourceIds.filter((id) => id !== sourceId),
+    } : {
+      ...project.handover,
+      tasks: project.handover.tasks.map((task) => task.id === taskId ? { ...task, responseSourceIds: task.responseSourceIds.filter((id) => id !== sourceId) } : task),
+    };
+    const detached = syncProjectStage({ ...project, handover: nextHandover, updatedAt: new Date().toISOString() });
+    const removeSource = !sourceIsReferenced(detached, sourceId);
+    const nextProject = removeSource ? { ...detached, sources: detached.sources.filter((source) => source.id !== sourceId) } : detached;
+    const nextFiles = new Map(sourceFiles);
+    const source = project.sources.find((item) => item.id === sourceId);
+    if (removeSource) {
+      nextFiles.delete(sourceId);
+      await removePersistedSourceFile(project.id, sourceId).catch(() => undefined);
+    }
+    commitProject(nextProject);
+    setSourceFiles(nextFiles);
+    if (directoryHandle) {
+      if (removeSource && source) await removeWorkspaceFileFromRelativePath(directoryHandle, workspaceSourcePath(source)).catch(() => undefined);
+      await saveProjectStateToDirectory(directoryHandle, nextProject, nextFiles).catch(() => undefined);
+      await synchronizeDerivedWorkspaceArtifacts(directoryHandle, nextProject).catch(() => undefined);
+    }
+  };
+
+  const importHandoverResponseFiles = async (task: HandoverTask, files: FileList | null) => {
+    if (!files?.length) return;
+    setBusy(true);
+    try {
+      const parsed: Array<{ source: SourceDocument; file: File }> = [];
+      for (const file of Array.from(files)) {
+        const source = await parseSourceFile(file);
+        parsed.push({ source, file });
+      }
+      const taskIndex = Math.max(0, project.handover.tasks.findIndex((item) => item.id === task.id));
+      const relativeDirectory = `${handoverTaskDirectory(task.title, taskIndex)}/导入文件`;
+      const prepared = await prepareImportedSources(parsed, relativeDirectory);
+      const sourceIds = prepared.resolvedSources.map((source) => source.id);
+      const nextProject = syncProjectStage({
+        ...project,
+        sources: [...project.sources, ...prepared.addedSources],
+        handover: {
+          ...project.handover,
+          tasks: project.handover.tasks.map((item) => item.id === task.id ? {
+            ...item,
+            responseSourceIds: [...new Set([...item.responseSourceIds, ...sourceIds])],
+            status: item.status === "pending" ? "submitted" : item.status,
+          } : item),
+        },
+        updatedAt: new Date().toISOString(),
+      });
+      commitProject(nextProject);
+      setSourceFiles(prepared.nextFiles);
+      await persistSourceFiles(project.id, new Map(prepared.addedSources.map((source) => [source.id, prepared.nextFiles.get(source.id) as File]))).catch(() => undefined);
+      if (directoryHandle) {
+        await saveExistingSourceNote(relativeDirectory, prepared.resolvedSources);
+        await saveProjectStateToDirectory(directoryHandle, nextProject, prepared.nextFiles);
+      }
+      setNotice(locale === "zh" ? `${prepared.resolvedSources.length} 个响应文件已加入任务。` : `${prepared.resolvedSources.length} response file(s) added to the task.`);
+    } catch {
+      setNotice(locale === "zh" ? "响应文件导入失败；软件包可改用受控路径记录。" : "Response file import failed. Record software packages as a controlled path instead.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addHandoverDepartment = () => updateHandover({
+    departments: [...project.handover.departments, {
+      id: createId("department"),
+      name: "",
+      responsibility: "",
+      owner: "",
+      defaultDeliverableType: "document",
+      defaultResponseMethod: "file",
+    }],
+  });
+
+  const removeHandoverDepartment = (department: HandoverDepartment) => {
+    const assigned = project.handover.tasks.filter((task) => task.departmentId === department.id).length;
+    if (assigned && !window.confirm(locale === "zh" ? `该部门已有 ${assigned} 项任务。删除后这些任务将变为未分配，是否继续？` : `${assigned} task(s) are assigned to this department. They will become unassigned. Continue?`)) return;
+    updateHandover({
+      departments: project.handover.departments.filter((item) => item.id !== department.id),
+      tasks: project.handover.tasks.map((task) => task.departmentId === department.id ? { ...task, departmentId: "" } : task),
+    });
+  };
+
+  const addHandoverTask = async () => {
+    const department = project.handover.departments[0];
+    const task: HandoverTask = {
+      id: createId("handover-task"),
+      title: "",
+      departmentId: department?.id || "",
+      scope: "",
+      deliverableType: department?.defaultDeliverableType || "document",
+      responseMethod: department?.defaultResponseMethod || "file",
+      deliverableName: "",
+      owner: department?.owner || "",
+      dueDate: "",
+      status: "pending",
+      dependencyNotes: "",
+      acceptanceCriteria: "",
+      sourceIds: [],
+      responseText: "",
+      responsePath: "",
+      responseSourceIds: [],
+    };
+    if (isUsableProjectDirectory(directoryHandle)) {
+      try {
+        await ensureWorkspaceDirectoryPath(directoryHandle, handoverTaskDirectory(task.title, project.handover.tasks.length));
+      } catch {
+        setNotice(locale === "zh" ? "无法创建交底任务目录，请重新授权项目路径。" : "The handover task folder could not be created. Reauthorize the project folder.");
+        return;
+      }
+    }
+    updateHandover({ tasks: [...project.handover.tasks, task] });
+    setExpandedHandoverTaskId(task.id);
+  };
+
+  const runHandoverTaskSplit = async (invocation: ModelInvocation) => {
+    const inputs = selectedHandoverSources(true);
+    if (!inputs) return;
+    if (project.handover.tasks.length && !window.confirm(locale === "zh" ? "重新分拆会替换当前交底任务及其响应记录，是否继续？" : "Splitting again replaces the current handover tasks and their responses. Continue?")) return;
+    setBusy(true);
+    setGeneratingActionId("handover-task-split");
+    try {
+      const prompt = buildHandoverTaskSplitPrompt(project, inputs.awardSources, inputs.bidSources, locale);
+      const result = await requestHandoverTaskSplit(invocation.settings, invocation.apiKey, prompt);
+      const departmentIds = new Set(project.handover.departments.map((department) => department.id));
+      const sourceIds = new Set([...inputs.awardSources, ...inputs.bidSources].map((source) => source.id));
+      const tasks: HandoverTask[] = result.tasks
+        .filter((task) => departmentIds.has(task.departmentId))
+        .map((task) => ({
+          ...task,
+          id: createId("handover-task"),
+          sourceIds: task.sourceIds.filter((id) => sourceIds.has(id)),
+          status: "pending",
+          responseText: "",
+          responsePath: "",
+          responseSourceIds: [],
+        }));
+      if (!tasks.length) throw new Error("HANDOVER_TASKS_EMPTY");
+      const nextProject = syncProjectStage({
+        ...project,
+        handover: {
+          ...project.handover,
+          tasks,
+          lastSplitAt: new Date().toISOString(),
+          lastSplitProvider: result.provider,
+          lastSplitModel: result.model,
+        },
+        updatedAt: new Date().toISOString(),
+      });
+      commitProject(nextProject);
+      if (directoryHandle) {
+        for (const [index, task] of tasks.entries()) await ensureWorkspaceDirectoryPath(directoryHandle, handoverTaskDirectory(task.title, index));
+        await saveProjectStateToDirectory(directoryHandle, nextProject, sourceFiles);
+      }
+      setExpandedHandoverTaskId(tasks[0]?.id || "");
+      setNotice(locale === "zh" ? `已分拆 ${tasks.length} 项交底任务，请逐项复核。` : `${tasks.length} handover task(s) created. Review each item.`);
+    } catch {
+      setNotice(locale === "zh" ? "交底任务分拆失败，请检查部门配置、来源文件和模型接口。" : "Task split failed. Check departments, source files, and model configuration.");
+    } finally {
+      setBusy(false);
+      setGeneratingActionId("");
+    }
+  };
+
+  const startHandoverTaskSplit = () => {
+    const invocation = configuredModel();
+    if (invocation) {
+      void runHandoverTaskSplit(invocation);
+      return;
+    }
+    if (!selectedHandoverSources()) return;
+    setPendingModelAction({ kind: "handover-task-split", anchorId: "handover-checklist" });
   };
 
   useEffect(() => {
     if (!ready || !filesHydrated || !resumeModelAction) return;
     const pending = resumeModelAction;
     setResumeModelAction(null);
+    if (!isUsableProjectDirectory(directoryHandle)) {
+      setProjectPathRequired(true);
+      return;
+    }
     const invocation = configuredModel();
     if (!invocation) {
       setPendingModelAction(pending);
@@ -1731,7 +2708,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const item = project.bidFileChecklist.find((candidate) => candidate.id === pending.bidFileId);
       if (item) void generateBidFile(item, invocation);
     }
-  }, [filesHydrated, ready, resumeModelAction]);
+    else if (pending.kind === "handover-task-split") void runHandoverTaskSplit(invocation);
+  }, [directoryHandle, filesHydrated, ready, resumeModelAction]);
 
   const saveTenderTask = async (task: { name: string; content: string }) => {
     setBusy(true);
@@ -1767,7 +2745,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const prompt = kind === "analysis"
         ? buildTenderAnalysisPrompt(project, inputs.tenderSources, inputs.clarificationSources, inputs.templates, locale)
         : buildTenderComparisonPrompt(project, inputs.presalesSources, inputs.tenderSources, inputs.clarificationSources, inputs.templates, locale);
-      void saveTenderTask(buildCodexTenderTask(kind === "analysis" ? "requirements" : "comparison", project, prompt, inputs.outputFormat, locale));
+      void saveTenderTask(buildCodexTenderTask(kind === "analysis" ? "requirements" : "comparison", project, prompt, inputs.outputFormat, locale, inputs.templates));
       return;
     }
     if (pending.kind === "bid-output") {
@@ -1776,6 +2754,12 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const inputs = bidFileInputs(item);
       if (!inputs) return;
       void saveTenderTask(buildCodexBidFileTask(project, item, inputs.references, inputs.templates, locale));
+      return;
+    }
+    if (pending.kind === "handover-task-split") {
+      const inputs = selectedHandoverSources();
+      if (!inputs) return;
+      void saveTenderTask(buildCodexHandoverTask(project, inputs.awardSources, inputs.bidSources, locale));
       return;
     }
     const round = project.presalesRounds.find((item) => item.id === pending.roundId);
@@ -1792,7 +2776,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
   const openGeneratedFile = async (record: PresalesGeneratedFile) => {
     try {
-      const file = generatedBlobs.get(record.id) || sourceFiles.get(record.sourceId) || (directoryHandle ? await readGeneratedFileFromDirectory(directoryHandle, project, record.name) : null);
+      const file = generatedBlobs.get(record.id) || sourceFiles.get(record.sourceId) || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, record.relativePath).catch(() => readGeneratedFileFromDirectory(directoryHandle, project, record.name)) : null);
       if (!file) throw new Error("FILE_NOT_AVAILABLE");
       if (record.format === "md") {
         const url = URL.createObjectURL(file);
@@ -1815,20 +2799,49 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setExpandedTenderSourceId("");
     setExpandedTenderResultId("");
     setExpandedBidFileId("");
+    setWorkspaceOutputFiles([]);
+    setSelectedOutputPaths(new Set());
     void clearPersistedSourceFiles(previousProjectId).catch(() => undefined);
   };
 
-  const chooseDirectory = async () => {
+  const chooseDirectory = async (mode: PendingDirectoryChange["mode"]) => {
+    try {
+      const handle = await chooseWorkspaceDirectory(directoryHandle);
+      setPendingDirectoryChange({ handle, mode });
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setNotice(locale === "zh" ? "无法打开文件夹选择窗口。" : "The folder picker could not be opened.");
+      }
+    }
+  };
+  const confirmDirectoryChange = async () => {
+    if (!pendingDirectoryChange) return;
+    const { handle, mode } = pendingDirectoryChange;
+    setPendingDirectoryChange(null);
     setBusy(true);
     try {
-      const handle = await chooseWorkspaceDirectory();
+      if (mode === "migrate" && directoryHandle) {
+        await saveProjectStateToDirectory(directoryHandle, project, sourceFiles);
+        await migrateWorkspaceDirectory(directoryHandle, handle);
+      }
+      await ensureProjectStageDirectories(handle);
+      const nextProject = syncProjectStage({ ...project, localPathHint: handle.name, updatedAt: new Date().toISOString() });
+      await saveProjectStateToDirectory(handle, nextProject, sourceFiles);
       await persistWorkspaceDirectory(handle);
+      historyRef.current.reset();
+      commitProject(nextProject, "", false);
       setDirectoryHandle(handle);
-      await saveProjectStateToDirectory(handle, project, sourceFiles);
-      setNotice(`${locale === "zh" ? "项目路径已设置" : "Project folder selected"}: ${handle.name}`);
-    } catch {
-      setNotice(locale === "zh" ? "未选择目录，可继续使用 ZIP。" : "No folder selected. ZIP remains available.");
-    } finally { setBusy(false); }
+      window.queueMicrotask(publishHistoryState);
+      setNotice(mode === "migrate"
+        ? (locale === "zh" ? `项目已迁移到“${handle.name}”。` : `Project migrated to “${handle.name}”.`)
+        : (locale === "zh" ? `项目路径已设置为“${handle.name}”。` : `Project folder set to “${handle.name}”.`));
+    } catch (error) {
+      setNotice(error instanceof Error && error.message.includes("inside")
+        ? (locale === "zh" ? "新项目路径不能位于当前项目的受管目录中。" : "The new project folder cannot be inside the current managed workspace.")
+        : (locale === "zh" ? "项目路径设置或迁移失败，请检查新旧目录中的受管文件后重试。" : "Project folder setup or migration failed. Check the managed files in both folders before retrying."));
+    } finally {
+      setBusy(false);
+    }
   };
   const syncDirectory = async () => {
     if (!directoryHandle) return;
@@ -1863,46 +2876,66 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     } catch { setNotice(t.invalid); }
     finally { setBusy(false); if (archiveInput.current) archiveInput.current.value = ""; }
   };
-  const exportArchive = async () => {
-    setBusy(true);
-    try {
-      const result = await buildProjectArchive(project, includeSources, sourceFiles);
-      const name = `${projectFileStem(project)}-package.zip`;
-      if (directoryHandle) await saveGeneratedFileToDirectory(directoryHandle, project, name, result.blob);
-      else downloadBlob(name, result.blob);
-      setNotice(locale === "zh"
-        ? `ZIP 已生成，包含 ${result.manifest.files.length} 个正式输出${directoryHandle ? "，并已保存到项目路径" : ""}。`
-        : `ZIP created with ${result.manifest.files.length} formal outputs${directoryHandle ? " and saved to the project folder" : ""}.`);
-    } finally { setBusy(false); }
-  };
+  const setOutputPathsChecked = (paths: string[], checked: boolean) => setSelectedOutputPaths((current) => {
+    const next = new Set(current);
+    paths.forEach((path) => checked ? next.add(path) : next.delete(path));
+    return next;
+  });
 
-  const saveOutput = async (name: string, content: Blob | string | ArrayBuffer | Promise<Blob | string | ArrayBuffer>, type: string) => {
-    setBusy(true);
+  const chooseOutputDirectory = async () => {
     try {
-      const resolved = await content;
-      if (directoryHandle) {
-        await saveGeneratedFileToDirectory(directoryHandle, project, name, resolved);
-        setNotice(locale === "zh" ? `${name} 已保存到项目路径。` : `${name} saved to the project folder.`);
-      } else if (typeof resolved === "string") downloadText(name, resolved, type);
-      else downloadBlob(name, resolved instanceof Blob ? resolved : new Blob([resolved], { type }));
-    } catch {
-      setNotice(t.invalid);
-    } finally { setBusy(false); }
-  };
-
-  const taskPrompt = useMemo(() => {
-    const path = directoryHandle
-      ? `<${locale === "zh" ? `请在 Codex 中指定已选择的“${directoryHandle.name}”文件夹完整路径` : `specify the full path of the selected “${directoryHandle.name}” folder in Codex`}>`
-      : `<${locale === "zh" ? "请在 Codex 中指定项目目录的完整路径" : "specify the full project folder path in Codex"}>`;
-    if (locale === "zh") {
-      if (taskKind === "extract") return `使用 $tender-requirement-extraction 处理工作区 ${path} 中项目 ${project.id}。读取 sources 目录的招标文件及澄清文件，逐条保留页码或段落来源，输出 requirements.csv、requirements.md 和更新后的 project.json。不得把缺少证据的要求写成满足。`;
-      if (taskKind === "bid") return `使用 $technical-bid-package 处理工作区 ${path} 中项目 ${project.id}。只使用已复核的招标要求和 library 中已核验资料，生成技术方案、响应表、偏离表、部署与验收文件以及 presentation.md。未知、缺少证据和商务价格事项必须保留待确认。`;
-      return `使用 $solution-workflow 处理工作区 ${path} 中项目 ${project.id}。按售前、招标要求、技术标和中标交底流程检查现状，必要时调用 $tender-requirement-extraction 与 $technical-bid-package。完成后更新 project.json 和 outputs，并列出仍需人工确认的事项。`;
+      const handle = await chooseProjectOutputDirectory(outputDirectoryHandle || directoryHandle);
+      if (directoryHandle) await validateWorkspaceOutputDirectory(directoryHandle, handle);
+      setOutputDirectoryHandle(handle);
+      setNotice(locale === "zh" ? `输出路径已设置为“${handle.name}”。` : `Output folder set to “${handle.name}”.`);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setNotice(error instanceof Error && error.message === "OUTPUT_INSIDE_WORKSPACE"
+        ? (locale === "zh" ? "输出路径不能是项目路径，也不能位于项目的受管目录中。" : "The output folder cannot be the project folder or one of its managed subfolders.")
+        : (locale === "zh" ? "无法设置输出路径。" : "The output folder could not be set."));
     }
-    if (taskKind === "extract") return `Use $tender-requirement-extraction for project ${project.id} in workspace ${path}. Read the tender and amendment files under sources, preserve a page or paragraph locator for every requirement, and produce requirements.csv, requirements.md, and an updated project.json. Never mark a requirement as compliant when evidence is missing.`;
-    if (taskKind === "bid") return `Use $technical-bid-package for project ${project.id} in workspace ${path}. Use only reviewed tender requirements and verified materials from library. Produce the technical proposal, response matrix, deviation table, deployment and acceptance documents, and presentation.md. Keep unknown items, evidence gaps, and commercial pricing matters pending for human review.`;
-    return `Use $solution-workflow for project ${project.id} in workspace ${path}. Review the presales, tender requirement, technical bid, and award handover stages. Call $tender-requirement-extraction and $technical-bid-package when needed. Update project.json and outputs, then list every item that still requires human confirmation.`;
-  }, [directoryHandle, project.id, taskKind, locale]);
+  };
+
+  const outputSelectionIsReady = () => {
+    if (!isUsableProjectDirectory(directoryHandle)) {
+      setProjectPathRequired(true);
+      return false;
+    }
+    if (!isUsableProjectDirectory(outputDirectoryHandle)) {
+      setOutputPathRequired(true);
+      return false;
+    }
+    if (!selectedOutputPaths.size) {
+      setNotice(locale === "zh" ? "请至少选择一个需要输出的文件。" : "Select at least one file to output.");
+      return false;
+    }
+    return true;
+  };
+
+  const exportSelectedFiles = async (kind: "complete" | "zip") => {
+    if (!outputSelectionIsReady() || !directoryHandle || !outputDirectoryHandle) return;
+    setBusy(true);
+    try {
+      const paths = [...selectedOutputPaths];
+      if (kind === "complete") {
+        const result = await copyWorkspaceFilesToOutput(directoryHandle, outputDirectoryHandle, project.name, paths);
+        setNotice(locale === "zh"
+          ? `已将 ${result.files.length} 个文件完整输出到“${outputDirectoryHandle.name}/${result.projectDirectoryName}”。`
+          : `${result.files.length} files were copied to “${outputDirectoryHandle.name}/${result.projectDirectoryName}”.`);
+      } else {
+        const result = await saveWorkspaceFilesAsZip(directoryHandle, outputDirectoryHandle, project.name, paths);
+        setNotice(locale === "zh"
+          ? `已将 ${result.files.length} 个文件导出为“${result.name}”。`
+          : `${result.files.length} files were exported as “${result.name}”.`);
+      }
+    } catch (error) {
+      setNotice(error instanceof Error && error.message === "OUTPUT_INSIDE_WORKSPACE"
+        ? (locale === "zh" ? "输出路径不能是项目路径，也不能位于项目的受管目录中。" : "The output folder cannot be the project folder or one of its managed subfolders.")
+        : (locale === "zh" ? "文件输出失败，请检查项目路径、输出路径和目录权限。" : "File output failed. Check the project folder, output folder, and permissions."));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const renderProjectContext = () => <section className="work-section">
     <div className="section-heading">
@@ -1915,16 +2948,16 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       <Field label={t.industry}><input value={project.industry} onChange={(event) => updateProject("industry", event.target.value)} /></Field>
       <Field label={t.owner}><input value={project.owner} onChange={(event) => updateProject("owner", event.target.value)} /></Field>
       <Field label={t.budget}><input value={project.budget} onChange={(event) => updateProject("budget", event.target.value)} /></Field>
-      <Field label={t.deadline}><input type="date" value={project.deadline} onChange={(event) => updateProject("deadline", event.target.value)} /></Field>
-      <Field label={t.objective} wide><textarea rows={4} value={project.objective} onChange={(event) => updateProject("objective", event.target.value)} /></Field>
-      <Field label={t.constraints} wide><textarea rows={4} value={project.constraints} onChange={(event) => updateProject("constraints", event.target.value)} /></Field>
+      <Field label={t.deadline}><LocalizedTemporalInput type="date" locale={locale} ariaLabel={t.deadline} value={project.deadline} onChange={(value) => updateProject("deadline", value)}/></Field>
+      <ConfirmableTextarea fieldId="project-objective" label={t.objective} locale={locale} rows={4} wide value={project.objective} confirmed={project.confirmedTextFields.includes("project-objective")} onChange={(value) => updateProject("objective", value)} onConfirmedChange={(confirmed) => setTextFieldConfirmed("project-objective", confirmed)}/>
+      <ConfirmableTextarea fieldId="project-constraints" label={t.constraints} locale={locale} rows={4} wide value={project.constraints} confirmed={project.confirmedTextFields.includes("project-constraints")} onChange={(value) => updateProject("constraints", value)} onConfirmedChange={(confirmed) => setTextFieldConfirmed("project-constraints", confirmed)}/>
     </div>
   </section>;
 
   const renderPresales = () => <>
     {renderProjectContext()}
     <section className="work-section">
-      <div className="section-heading"><div><p>{t.meetingEyebrow}</p><h2>{locale === "zh" ? "客户沟通与文件响应" : "Customer communications and file responses"}</h2></div><button className="icon-command" type="button" onClick={() => updateProject("presalesRounds", [...project.presalesRounds, createPresalesRound(locale, project.presalesRounds.length + 1)])} title={locale === "zh" ? "新增沟通节点" : "Add communication node"} aria-label={locale === "zh" ? "新增沟通节点" : "Add communication node"}><Plus size={18}/></button></div>
+      <div className="section-heading"><div><p>{t.meetingEyebrow}</p><h2>{locale === "zh" ? "客户沟通与文件响应" : "Customer communications and file responses"}</h2></div><button className="icon-command" type="button" onClick={() => void addPresalesRound()} title={locale === "zh" ? "新增沟通节点" : "Add communication node"} aria-label={locale === "zh" ? "新增沟通节点" : "Add communication node"}><Plus size={18}/></button></div>
       <div className="presales-rounds">
         <div className="presales-round-head"><span>{locale === "zh" ? "沟通节点" : "Communication"}</span><span>{locale === "zh" ? "客户信息及需求" : "Customer information and needs"}</span><span>{locale === "zh" ? "执行清单与生成要求" : "Actions and generation request"}</span><span>{locale === "zh" ? "生成文件列表" : "Generated files"}</span></div>
         {project.presalesRounds.map((round, roundIndex) => {
@@ -1939,7 +2972,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
             <div className="round-node">
               <span className="round-cell-label">{locale === "zh" ? "沟通节点" : "Communication"}</span>
               <input aria-label={locale === "zh" ? "沟通节点名称" : "Communication name"} value={round.title} onChange={(event) => updatePresalesRound(round.id, { title: event.target.value })}/>
-              <input aria-label={locale === "zh" ? "沟通时间" : "Communication time"} type="datetime-local" value={round.meetingAt} onChange={(event) => updatePresalesRound(round.id, { meetingAt: event.target.value })}/>
+              <LocalizedTemporalInput type="datetime-local" locale={locale} ariaLabel={locale === "zh" ? "沟通时间" : "Communication time"} value={round.meetingAt} onChange={(value) => updatePresalesRound(round.id, { meetingAt: value })}/>
               <div className="participant-editor">
                 <strong>{locale === "zh" ? "参与沟通人员" : "Participants"}</strong>
                 <select aria-label={locale === "zh" ? "参会人员类别" : "Participant category"} value={participantDraft.category} onChange={(event) => setParticipantDrafts((current) => ({ ...current, [round.id]: { ...participantDraft, category: event.target.value as PresalesParticipant["category"] } }))}>{Object.entries(participantCategoryLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
@@ -1949,7 +2982,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
                   return participants.length > 0 && <div key={category}><span>{participantCategoryLabels[locale][category]}</span><div>{participants.map((participant) => <span key={participant.id}>{participant.name}<button type="button" aria-label={locale === "zh" ? `删除参会人员 ${participant.name}` : `Delete participant ${participant.name}`} title={locale === "zh" ? "删除参会人员" : "Delete participant"} onClick={() => updatePresalesRound(round.id, { participants: round.participants.filter((item) => item.id !== participant.id) })}><X size={12}/></button></span>)}</div></div>;
                 })}</div>}
               </div>
-              <button className="row-delete" type="button" title={t.remove} aria-label={`${t.remove}: ${round.title}`} onClick={() => updateProject("presalesRounds", project.presalesRounds.filter((item) => item.id !== round.id))}><Trash2 size={17}/></button>
+              <button className="row-delete" type="button" title={t.remove} aria-label={`${t.remove}: ${round.title}`} onClick={() => void removePresalesRound(round)}><Trash2 size={17}/></button>
             </div>
             <div className="round-needs">
               <span className="round-cell-label">{locale === "zh" ? "客户信息及需求" : "Customer information and needs"}</span>
@@ -1967,7 +3000,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
                 <div className="recommended-keywords"><span>{locale === "zh" ? "推荐关键词" : "Recommended"}</span><div>{recommendedAnalysisKeywords[locale].map((keyword) => <button type="button" key={keyword} disabled={round.keywords.includes(keyword)} onClick={() => addAnalysisKeyword(round, keyword)}>{keyword}</button>)}</div></div>
                 {round.keywords.length > 0 && <div className="selected-keywords">{round.keywords.map((keyword) => <span key={keyword}>{keyword}<button type="button" aria-label={locale === "zh" ? `删除关键词 ${keyword}` : `Delete keyword ${keyword}`} title={locale === "zh" ? "删除关键词" : "Delete keyword"} onClick={() => updatePresalesRound(round.id, { keywords: round.keywords.filter((item) => item !== keyword) })}><X size={13}/></button></span>)}</div>}
               </div>
-              <Field label={locale === "zh" ? "分析要求" : "Analysis requirements"}><textarea rows={5} aria-label={locale === "zh" ? "分析要求" : "Analysis requirements"} placeholder={locale === "zh" ? "输入模型分析时需要遵循的提示词、重点和输出要求" : "Enter the prompt, priorities, and output requirements for the model"} value={round.analysisRequirements} onChange={(event) => updatePresalesRound(round.id, { analysisRequirements: event.target.value })}/></Field>
+              <ConfirmableTextarea fieldId={`presales-analysis-${round.id}`} label={locale === "zh" ? "分析要求" : "Analysis requirements"} locale={locale} rows={5} placeholder={locale === "zh" ? "输入模型分析时需要遵循的提示词、重点和输出要求" : "Enter the prompt, priorities, and output requirements for the model"} value={round.analysisRequirements} confirmed={project.confirmedTextFields.includes(`presales-analysis-${round.id}`)} onChange={(value) => updatePresalesRound(round.id, { analysisRequirements: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`presales-analysis-${round.id}`, confirmed)}/>
               <div className="analysis-config-block template-config">
                 <label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传模板" : "Upload templates"}<input hidden multiple type="file" accept=".docx,.pptx,.md" onChange={(event) => { void importPresalesFiles(event.target.files, { kind: "templates", roundId: round.id }); event.currentTarget.value = ""; }}/></label>
                 {templateSources.length > 0 && <div className="template-source-list">{templateSources.map((source) => source && <div className={round.selectedTemplateSourceIds.includes(source.id) ? "selected" : ""} key={source.id}><button type="button" aria-pressed={round.selectedTemplateSourceIds.includes(source.id)} onClick={() => toggleAnalysisTemplate(round, source.id)}><FileText size={15}/><span>{source.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除模板 ${source.name}` : `Delete template ${source.name}`} title={locale === "zh" ? "删除模板" : "Delete template"} onClick={() => void removePresalesSource(round, source.id, "templates")}><X size={14}/></button></div>)}</div>}
@@ -1997,10 +3030,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
                   </div>
                   <Field label={t.owner}><input aria-label={t.owner} placeholder={t.owner} value={action.owner} onChange={(event) => updateRoundAction(round, action.id, { owner: event.target.value })}/></Field>
                   <div className="action-meta-fields">
-                    <Field label={locale === "zh" ? "截止时间" : "Deadline"}><input aria-label={locale === "zh" ? "截止时间" : "Deadline"} type="date" value={action.dueDate} onChange={(event) => updateRoundAction(round, action.id, { dueDate: event.target.value })}/></Field>
+                    <Field label={locale === "zh" ? "截止时间" : "Deadline"}><LocalizedTemporalInput type="date" locale={locale} ariaLabel={locale === "zh" ? "截止时间" : "Deadline"} value={action.dueDate} onChange={(value) => updateRoundAction(round, action.id, { dueDate: value })}/></Field>
                     <Field label={locale === "zh" ? "文件状态" : "File status"}><select aria-label={locale === "zh" ? "文件状态" : "File status"} value={action.status} onChange={(event) => updateRoundAction(round, action.id, { status: event.target.value as PresalesRoundAction["status"] })}>{Object.entries(actionStatusLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field>
                   </div>
-                  <Field label={locale === "zh" ? "文件要求" : "File requirements"}><textarea rows={5} aria-label={locale === "zh" ? "文件要求" : "File requirements"} placeholder={locale === "zh" ? "说明文件格式、内容、参考模板、需继承的信息及不得承诺的事项" : "Describe formatting, content, reference templates, inherited information, and prohibited commitments"} value={action.fileRequirements || ""} onChange={(event) => updateRoundAction(round, action.id, { fileRequirements: event.target.value })}/></Field>
+                  <ConfirmableTextarea fieldId={`presales-file-requirements-${action.id}`} label={locale === "zh" ? "文件要求" : "File requirements"} locale={locale} rows={5} placeholder={locale === "zh" ? "说明文件格式、内容、参考模板、需继承的信息及不得承诺的事项" : "Describe formatting, content, reference templates, inherited information, and prohibited commitments"} value={action.fileRequirements || ""} confirmed={project.confirmedTextFields.includes(`presales-file-requirements-${action.id}`)} onChange={(value) => updateRoundAction(round, action.id, { fileRequirements: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`presales-file-requirements-${action.id}`, confirmed)}/>
                   <div className="analysis-config-block template-config action-template-config">
                     <strong>{locale === "zh" ? "响应文件模板" : "Response file templates"}</strong>
                     <label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传模板" : "Upload templates"}<input hidden multiple type="file" accept=".docx,.pptx,.md" onChange={(event) => { void importPresalesFiles(event.target.files, { kind: "action-templates", roundId: round.id, actionId: action.id }); event.currentTarget.value = ""; }}/></label>
@@ -2065,7 +3098,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const comparisonResults = project.tenderComparison.results;
     return <>
       <section className="work-section" id="tender-files">
-        <div className="section-heading"><div><p>{locale === "zh" ? "招标输入 / 预处理" : "TENDER INPUT / PREPROCESSING"}</p><h2>{t.sourceLibrary}</h2><span className="section-description">{t.noSource}</span></div><button className="command-button" type="button" disabled={busy} onClick={() => sourceInput.current?.click()}><Upload size={17}/>{t.importSources}</button></div>
+        <div className="section-heading"><div><p>{locale === "zh" ? "招标输入 / 预处理" : "TENDER INPUT / PREPROCESSING"}</p><h2>{t.sourceLibrary}</h2><span className="section-description">{t.noSource}</span></div><button className="command-button" type="button" disabled={busy} onClick={() => openGuardedFilePicker(sourceInput.current)}><Upload size={17}/>{t.importSources}</button></div>
         <input ref={sourceInput} hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importTenderFiles(event.target.files, { kind: "tender" }); event.currentTarget.value = ""; }}/>
         {tenderSources.length ? <>
           <div className="tender-file-toolbar"><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? "全选招标文件" : "Select all tender files"} checked={allTenderSelected} onChange={(event) => updateProject("selectedTenderSourceIds", event.target.checked ? [...project.tenderSourceIds] : [])}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label><button type="button" disabled={!project.selectedTenderSourceIds.length || busy} onClick={() => preprocessTenderSources(project.selectedTenderSourceIds)}><RefreshCw size={16}/>{locale === "zh" ? "预处理" : "Preprocess"}</button><button type="button" className="danger-command" disabled={busy} onClick={() => void removeTenderSources(project.tenderSourceIds)}><Trash2 size={16}/>{locale === "zh" ? "删除全部导入文件" : "Delete all imported files"}</button></div>
@@ -2074,9 +3107,20 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       </section>
 
       <section className="work-section tender-clarifications">
-        <div className="section-heading"><div><p>{locale === "zh" ? "补遗 / 澄清" : "ADDENDA / CLARIFICATIONS"}</p><h2>{locale === "zh" ? "澄清及相关文件" : "Clarifications and related files"}</h2></div><button className="icon-command" type="button" aria-label={locale === "zh" ? "新增澄清节点" : "Add clarification node"} onClick={() => updateProject("tenderClarificationRounds", [...project.tenderClarificationRounds, { id: createId("clarification"), title: locale === "zh" ? `第 ${project.tenderClarificationRounds.length + 1} 次澄清` : `Clarification ${project.tenderClarificationRounds.length + 1}`, occurredAt: "", sourceIds: [], selectedSourceIds: [] }])}><Plus size={18}/></button></div>
+        <div className="section-heading"><div><p>{locale === "zh" ? "补遗 / 澄清" : "ADDENDA / CLARIFICATIONS"}</p><h2>{locale === "zh" ? "澄清及相关文件" : "Clarifications and related files"}</h2></div><button className="icon-command" type="button" aria-label={locale === "zh" ? "新增澄清节点" : "Add clarification node"} onClick={() => void addTenderClarificationRound()}><Plus size={18}/></button></div>
         <div className="clarification-head"><span>{locale === "zh" ? "时间节点" : "Timeline"}</span><span>{locale === "zh" ? "澄清文件" : "Clarification files"}</span></div>
-        {project.tenderClarificationRounds.map((round) => <article className="clarification-row" id={`clarification-${round.id}`} key={round.id}><div className="clarification-node"><input aria-label={locale === "zh" ? "澄清节点名称" : "Clarification name"} value={round.title} onChange={(event) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, title: event.target.value } : item))}/><input aria-label={locale === "zh" ? "澄清时间" : "Clarification time"} type="datetime-local" value={round.occurredAt} onChange={(event) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, occurredAt: event.target.value } : item))}/><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除澄清节点 ${round.title}` : `Delete clarification ${round.title}`} onClick={() => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.filter((item) => item.id !== round.id))}><Trash2 size={16}/></button></div><div className="clarification-files"><label className="file-command"><Upload size={16}/>{locale === "zh" ? "导入澄清文件" : "Import clarification files"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importTenderFiles(event.target.files, { kind: "clarification", roundId: round.id }); event.currentTarget.value = ""; }}/></label>{round.sourceIds.length > 0 && <label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `全选 ${round.title} 文件` : `Select all files in ${round.title}`} checked={round.sourceIds.every((id) => round.selectedSourceIds.includes(id))} onChange={(event) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, selectedSourceIds: event.target.checked ? [...item.sourceIds] : [] } : item))}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label>}{renderTenderSourceList(round.sourceIds, round.selectedSourceIds, (sourceId, checked) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, selectedSourceIds: checked ? [...new Set([...item.selectedSourceIds, sourceId])] : item.selectedSourceIds.filter((id) => id !== sourceId) } : item)))}</div></article>)}
+        {project.tenderClarificationRounds.map((round) => <article className="clarification-row" id={`clarification-${round.id}`} key={round.id}>
+          <div className="clarification-node">
+            <input aria-label={locale === "zh" ? "澄清节点名称" : "Clarification name"} value={round.title} onChange={(event) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, title: event.target.value } : item))}/>
+            <LocalizedTemporalInput type="datetime-local" locale={locale} ariaLabel={locale === "zh" ? "澄清时间" : "Clarification time"} value={round.occurredAt} onChange={(value) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, occurredAt: value } : item))}/>
+            <button className="row-delete" type="button" aria-label={locale === "zh" ? `删除澄清节点 ${round.title}` : `Delete clarification ${round.title}`} onClick={() => void removeTenderClarificationRound(round.id)}><Trash2 size={16}/></button>
+          </div>
+          <div className="clarification-files">
+            <label className="file-command"><Upload size={16}/>{locale === "zh" ? "导入澄清文件" : "Import clarification files"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importTenderFiles(event.target.files, { kind: "clarification", roundId: round.id }); event.currentTarget.value = ""; }}/></label>
+            {round.sourceIds.length > 0 && <label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `全选 ${round.title} 文件` : `Select all files in ${round.title}`} checked={round.sourceIds.every((id) => round.selectedSourceIds.includes(id))} onChange={(event) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, selectedSourceIds: event.target.checked ? [...item.sourceIds] : [] } : item))}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label>}
+            {renderTenderSourceList(round.sourceIds, round.selectedSourceIds, (sourceId, checked) => updateProject("tenderClarificationRounds", project.tenderClarificationRounds.map((item) => item.id === round.id ? { ...item, selectedSourceIds: checked ? [...new Set([...item.selectedSourceIds, sourceId])] : item.selectedSourceIds.filter((id) => id !== sourceId) } : item)))}
+          </div>
+        </article>)}
         {!project.tenderClarificationRounds.length && <div className="empty-state"><FileSearch size={26}/><p>{locale === "zh" ? "有补遗或澄清时新增时间节点。" : "Add a timeline node when an addendum or clarification arrives."}</p></div>}
       </section>
 
@@ -2085,7 +3129,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         <div className="tender-analysis-grid">
           <div className="tender-analysis-pane"><div className="pane-title"><div><p>{locale === "zh" ? "要求提炼" : "REQUIREMENT EXTRACTION"}</p><h3>{locale === "zh" ? "招标要求分析" : "Tender requirement analysis"}</h3></div></div>
             <div className="analysis-config-block keyword-config"><strong>{locale === "zh" ? "关键词" : "Keywords"}</strong><div className="keyword-input-row"><input aria-label={locale === "zh" ? "新增招标分析关键词" : "New tender keyword"} value={tenderKeywordDraft} onChange={(event) => setTenderKeywordDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); const value = tenderKeywordDraft.trim(); if (value && !project.tenderAnalysis.keywords.includes(value)) updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: [...project.tenderAnalysis.keywords, value] }); setTenderKeywordDraft(""); } }}/><button className="icon-command" type="button" aria-label={locale === "zh" ? "添加招标分析关键词" : "Add tender keyword"} onClick={() => { const value = tenderKeywordDraft.trim(); if (value && !project.tenderAnalysis.keywords.includes(value)) updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: [...project.tenderAnalysis.keywords, value] }); setTenderKeywordDraft(""); }}><Plus size={17}/></button></div><div className="recommended-keywords"><span>{locale === "zh" ? "推荐关键词" : "Recommended"}</span><div>{recommendedAnalysisKeywords[locale].map((keyword) => <button type="button" key={keyword} disabled={project.tenderAnalysis.keywords.includes(keyword)} onClick={() => updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: [...project.tenderAnalysis.keywords, keyword] })}>{keyword}</button>)}</div></div>{project.tenderAnalysis.keywords.length > 0 && <div className="selected-keywords">{project.tenderAnalysis.keywords.map((keyword) => <span key={keyword}>{keyword}<button type="button" aria-label={locale === "zh" ? `删除招标分析关键词 ${keyword}` : `Delete tender keyword ${keyword}`} onClick={() => updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: project.tenderAnalysis.keywords.filter((item) => item !== keyword) })}><X size={13}/></button></span>)}</div>}</div>
-            <Field label={locale === "zh" ? "分析要求" : "Analysis requirements"}><textarea rows={6} aria-label={locale === "zh" ? "招标分析要求" : "Tender analysis requirements"} value={project.tenderAnalysis.analysisRequirements} onChange={(event) => updateProject("tenderAnalysis", { ...project.tenderAnalysis, analysisRequirements: event.target.value })} placeholder={locale === "zh" ? "说明需要提炼的时间、参数、评标、资质、废标项和投标文件清单" : "Describe deadlines, parameters, scoring, qualifications, rejection rules, and the bid-file checklist to extract"}/></Field>
+            <ConfirmableTextarea fieldId="tender-analysis-requirements" label={locale === "zh" ? "分析要求" : "Analysis requirements"} ariaLabel={locale === "zh" ? "招标分析要求" : "Tender analysis requirements"} locale={locale} rows={6} value={project.tenderAnalysis.analysisRequirements} confirmed={project.confirmedTextFields.includes("tender-analysis-requirements")} onChange={(value) => updateProject("tenderAnalysis", { ...project.tenderAnalysis, analysisRequirements: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed("tender-analysis-requirements", confirmed)} placeholder={locale === "zh" ? "说明需要提炼的时间、参数、评标、资质、废标项和投标文件清单" : "Describe deadlines, parameters, scoring, qualifications, rejection rules, and the bid-file checklist to extract"}/>
             {renderTenderTemplates("analysis")}
             <button className="generate-command analysis-command" type="button" disabled={busy || !project.selectedTenderSourceIds.length} onClick={() => startTenderAnalysis("analysis")}><Sparkles size={17}/>{generatingActionId === "tender-analysis" ? (locale === "zh" ? "正在分析" : "Analyzing") : (locale === "zh" ? "招标要求分析" : "Analyze tender requirements")}</button>
             {project.tenderAnalysis.results.length > 0 && <div className="analysis-result-list"><strong>{locale === "zh" ? "分析结果" : "Analysis results"}</strong>{project.tenderAnalysis.results.map((result) => <article className={expandedTenderResultId === result.id ? "expanded" : ""} key={result.id}><div><button type="button" onClick={() => { setExpandedTenderResultId(expandedTenderResultId === result.id ? "" : result.id); updateProject("tenderAnalysis", { ...project.tenderAnalysis, analysisRequirements: result.prompt }); }}><FileCheck2 size={16}/><span>{result.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除分析结果 ${result.name}` : `Delete analysis result ${result.name}`} onClick={() => void removeTenderResult(result)}><X size={14}/></button></div>{expandedTenderResultId === result.id && <button className="open-analysis-file" type="button" onClick={() => void openTenderResult(result)}><ExternalLink size={15}/>{locale === "zh" ? `打开文件 · ${result.fileName}` : `Open file · ${result.fileName}`}</button>}</article>)}</div>}
@@ -2101,7 +3145,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
       <section className="work-section"><div className="section-heading"><div><p>{t.baselineEyebrow}</p><h2>{t.baselineDiff}</h2></div><span>{comparisonResults.length}</span></div><div className="tender-difference-results">{comparisonResults.map((result) => <article key={result.id}><header><button type="button" onClick={() => void openTenderResult(result)}><FileSpreadsheet size={18}/><span><strong>{result.name}</strong><small>{result.fileName} · {new Date(result.createdAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}</small></span><ExternalLink size={15}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除对比结果 ${result.name}` : `Delete comparison ${result.name}`} onClick={() => void removeTenderResult(result)}><Trash2 size={16}/></button></header>{result.differences.map((difference, index) => <div className="diff-list" key={`${result.id}-${index}`}><div><span className={`relation ${difference.relation}`}>{diffRelationLabels[locale][difference.relation]}</span><p>{difference.presales || (locale === "zh" ? "未提供" : "Not provided")}</p><ChevronRight size={16}/><p>{difference.tender || (locale === "zh" ? "未提供" : "Not provided")}</p></div></div>)}</article>)}{!comparisonResults.length && <div className="empty-state"><FileSpreadsheet size={26}/><p>{locale === "zh" ? "完成售前文件对比后，结果会按分析批次显示在这里。" : "Comparison results will appear here by analysis run."}</p></div>}</div></section>
 
-      <section className="work-section"><div className="section-heading"><div><p>{locale === "zh" ? "组包输入 / 清单" : "PACKAGE INPUT / CHECKLIST"}</p><h2>{locale === "zh" ? "投标文件清单" : "Bid file checklist"}</h2></div><span>{project.bidFileChecklist.length}</span></div><div className="bid-file-checklist">{project.bidFileChecklist.map((item) => <div key={item.id}><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `确认投标文件 ${item.title}` : `Confirm bid file ${item.title}`} checked={item.status === "confirmed"} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, status: event.target.checked ? "confirmed" : "pending" } : entry))}/><span><Check size={13}/></span></label><select aria-label={locale === "zh" ? `文件类别 ${item.title}` : `File category ${item.title}`} value={item.category} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, category: event.target.value as BidFileChecklistItem["category"] } : entry))}>{Object.entries(bidFileCategoryLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><input aria-label={locale === "zh" ? "投标文件名称" : "Bid file name"} value={item.title} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, title: event.target.value } : entry))}/><input aria-label={locale === "zh" ? `投标文件说明 ${item.title}` : `Bid file notes ${item.title}`} placeholder={locale === "zh" ? "来源、责任人或待确认事项" : "Source, owner, or open questions"} value={item.notes} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, notes: event.target.value } : entry))}/><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除投标文件 ${item.title}` : `Delete bid file ${item.title}`} onClick={() => updateProject("bidFileChecklist", project.bidFileChecklist.filter((entry) => entry.id !== item.id))}><Trash2 size={16}/></button></div>)}</div>{!project.bidFileChecklist.length && <div className="empty-state"><FileOutput size={26}/><p>{locale === "zh" ? "招标要求分析后，识别到的投标文件会逐项加入清单。" : "Files identified by tender analysis will be added here."}</p></div>}</section>
+      <section className="work-section"><div className="section-heading"><div><p>{locale === "zh" ? "组包输入 / 清单" : "PACKAGE INPUT / CHECKLIST"}</p><h2>{locale === "zh" ? "投标文件清单" : "Bid file checklist"}</h2></div><span>{project.bidFileChecklist.length}</span></div><div className="bid-file-checklist">{project.bidFileChecklist.map((item) => <div key={item.id}><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `确认投标文件 ${item.title}` : `Confirm bid file ${item.title}`} checked={item.status === "confirmed"} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, status: event.target.checked ? "confirmed" : "pending" } : entry))}/><span><Check size={13}/></span></label><select aria-label={locale === "zh" ? `文件类别 ${item.title}` : `File category ${item.title}`} value={item.category} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, category: event.target.value as BidFileChecklistItem["category"] } : entry))}>{Object.entries(bidFileCategoryLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><input aria-label={locale === "zh" ? "投标文件名称" : "Bid file name"} value={item.title} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, title: event.target.value } : entry))}/><input aria-label={locale === "zh" ? `投标文件说明 ${item.title}` : `Bid file notes ${item.title}`} placeholder={locale === "zh" ? "来源、责任人或待确认事项" : "Source, owner, or open questions"} value={item.notes} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, notes: event.target.value } : entry))}/><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除投标文件 ${item.title}` : `Delete bid file ${item.title}`} onClick={() => void removeBidChecklistItem(item)}><Trash2 size={16}/></button></div>)}</div>{!project.bidFileChecklist.length && <div className="empty-state"><FileOutput size={26}/><p>{locale === "zh" ? "招标要求分析后，识别到的投标文件会逐项加入清单。" : "Files identified by tender analysis will be added here."}</p></div>}</section>
     </>;
   };
 
@@ -2121,7 +3165,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
             <section><div className="bid-editor-heading"><strong>{locale === "zh" ? "文件模板" : "File template"}</strong><label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传模板" : "Upload template"}<input hidden type="file" accept=".docx,.xlsx,.pptx,.md" onChange={(event) => { void importBidFiles(item, event.target.files, "template"); event.currentTarget.value = ""; }}/></label></div>{templates.length ? <div className="template-source-list">{templates.map((source) => <div className={item.selectedTemplateSourceIds.includes(source.id) ? "selected" : ""} key={source.id}><button type="button" aria-pressed={item.selectedTemplateSourceIds.includes(source.id)} onClick={() => toggleBidTemplate(item, source.id)}><FileText size={15}/><span>{source.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除模板 ${source.name}` : `Delete template ${source.name}`} onClick={() => void removeBidSource(item, source.id, "template")}><X size={14}/></button></div>)}</div> : <div className="bid-material-empty">{locale === "zh" ? "未上传时使用通用模板" : "A general template will be used"}</div>}</section>
             <section><div className="bid-editor-heading"><strong>{locale === "zh" ? "参考资料" : "Reference materials"}</strong><label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传参考资料" : "Upload references"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importBidFiles(item, event.target.files, "reference"); event.currentTarget.value = ""; }}/></label></div>{references.length ? <><label className="compact-check bid-select-all"><input type="checkbox" aria-label={locale === "zh" ? `全选 ${item.title} 参考资料` : `Select all references for ${item.title}`} checked={allReferencesSelected} onChange={(event) => updateBidFile(item.id, { selectedReferenceSourceIds: event.target.checked ? references.map((source) => source.id) : [] })}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label><div className="customer-source-list">{references.map((source) => <div key={source.id}><label><input type="checkbox" aria-label={locale === "zh" ? `选择参考资料 ${source.name}` : `Select reference ${source.name}`} checked={item.selectedReferenceSourceIds.includes(source.id)} onChange={(event) => updateBidFile(item.id, { selectedReferenceSourceIds: event.target.checked ? [...new Set([...item.selectedReferenceSourceIds, source.id])] : item.selectedReferenceSourceIds.filter((id) => id !== source.id) })}/><span><Check size={12}/></span><FileText size={15}/><strong>{source.name}</strong></label><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除参考资料 ${source.name}` : `Delete reference ${source.name}`} onClick={() => void removeBidSource(item, source.id, "reference")}><X size={14}/></button></div>)}</div></> : <div className="bid-material-empty">{locale === "zh" ? "尚未上传参考资料" : "No references uploaded"}</div>}</section>
           </div>
-          <div className="bid-output-fields"><Field label={locale === "zh" ? "输出格式" : "Output format"}><select aria-label={locale === "zh" ? `输出格式 ${item.title}` : `Output format ${item.title}`} value={item.outputFormat || ""} onChange={(event) => setBidOutputFormat(item, event.target.value as TenderOutputFormat | "")}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="xlsx">Excel</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field><Field wide label={locale === "zh" ? "细节要求" : "Detailed requirements"}><textarea aria-label={locale === "zh" ? `细节要求 ${item.title}` : `Detailed requirements ${item.title}`} rows={7} placeholder={locale === "zh" ? "填写文件范围、重点内容、章节结构、语气、不得承诺事项及需继承的模板要求" : "Specify scope, emphasis, structure, tone, prohibited commitments, and template requirements"} value={item.detailRequirements} onChange={(event) => updateBidFile(item.id, { detailRequirements: event.target.value })}/></Field></div>
+          <div className="bid-output-fields"><Field label={locale === "zh" ? "输出格式" : "Output format"}><select aria-label={locale === "zh" ? `输出格式 ${item.title}` : `Output format ${item.title}`} value={item.outputFormat || ""} onChange={(event) => setBidOutputFormat(item, event.target.value as TenderOutputFormat | "")}><option value="">{locale === "zh" ? "请选择" : "Select"}</option><option value="docx">Word</option><option value="xlsx">Excel</option><option value="pptx">PPT</option><option value="md">Markdown</option></select></Field><ConfirmableTextarea fieldId={`bid-detail-${item.id}`} wide label={locale === "zh" ? "细节要求" : "Detailed requirements"} ariaLabel={locale === "zh" ? `细节要求 ${item.title}` : `Detailed requirements ${item.title}`} locale={locale} rows={7} placeholder={locale === "zh" ? "填写文件范围、重点内容、章节结构、语气、不得承诺事项及需继承的模板要求" : "Specify scope, emphasis, structure, tone, prohibited commitments, and template requirements"} value={item.detailRequirements} confirmed={project.confirmedTextFields.includes(`bid-detail-${item.id}`)} onChange={(value) => updateBidFile(item.id, { detailRequirements: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`bid-detail-${item.id}`, confirmed)}/></div>
           <button className="generate-command bid-generate-command" type="button" disabled={busy} onClick={() => startBidFileGeneration(item)}><Sparkles size={18}/>{generatingActionId === `bid-output-${item.id}` ? (locale === "zh" ? "正在生成…" : "Generating…") : (locale === "zh" ? "生成文件" : "Generate file")}</button>
           {item.generatedFiles.length > 0 && <div className="bid-generated-list"><strong>{locale === "zh" ? "已生成文件" : "Generated files"}</strong>{item.generatedFiles.map((record) => <div key={record.id}><button type="button" onClick={() => void openBidGeneratedFile(record)}><FileCheck2 size={17}/><span><strong>{record.name}</strong><small>{record.provider} / {record.model} · {new Date(record.createdAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}</small></span><ExternalLink size={15}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除生成文件 ${record.name}` : `Delete generated file ${record.name}`} onClick={() => void removeBidGeneratedFile(item, record)}><Trash2 size={16}/></button></div>)}</div>}
         </div>}
@@ -2129,27 +3173,178 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     })}</div> : <div className="empty-state"><FileOutput size={26}/><p>{locale === "zh" ? "招标要求分析生成投标文件清单后，文件会同步显示在这里。" : "Files will appear here after tender analysis creates the bid file checklist."}</p></div>}
   </section>;
 
-  const renderHandover = () => <>
-    <section className="work-section"><div className="section-heading"><div><p>{t.commitmentEyebrow}</p><h2>{t.commitments}</h2></div><span>{coverage.approved}</span></div><div className="commitment-list">{project.requirements.filter((item) => item.reviewState === "approved").map((item) => <article key={item.id}><header><span>{responseLabels[locale][item.responseStatus]}</span><strong>{item.title}</strong></header><p>{item.formalResponse}</p><footer>{item.acceptanceCriteria || (locale === "zh" ? "验收标准待补充" : "Acceptance criteria missing")}</footer></article>)}</div></section>
-    <section className="work-section"><div className="section-heading"><div><p>{t.handoverEyebrow}</p><h2>{t.handoverList}</h2></div><button className="icon-command" type="button" title={t.add} onClick={() => updateProject("actions", [...project.actions, { id: createId("action"), stage: "delivery", title: locale === "zh" ? "新增交底事项" : "New handover item", owner: "", dueDate: "", status: "open", sourceRequirementId: "", notes: "" }])}><Plus size={18}/></button></div><div className="handover-grid"><div className="action-list">{project.actions.filter((item) => item.stage === "delivery").map((item) => <div className="handover-row" key={item.id}><select value={item.status} onChange={(event) => updateProject("actions", project.actions.map((candidate) => candidate.id === item.id ? { ...candidate, status: event.target.value as typeof item.status } : candidate))}>{Object.entries(actionStatusLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><input value={item.title} onChange={(event) => updateProject("actions", project.actions.map((candidate) => candidate.id === item.id ? { ...candidate, title: event.target.value } : candidate))}/><input placeholder={t.owner} value={item.owner} onChange={(event) => updateProject("actions", project.actions.map((candidate) => candidate.id === item.id ? { ...candidate, owner: event.target.value } : candidate))}/><input type="date" value={item.dueDate} onChange={(event) => updateProject("actions", project.actions.map((candidate) => candidate.id === item.id ? { ...candidate, dueDate: event.target.value } : candidate))}/></div>)}</div><Field label={locale === "zh" ? "交底说明、变更和未决事项" : "Handover notes, changes, and open items"}><textarea rows={10} value={project.handoverNotes} onChange={(event) => updateProject("handoverNotes", event.target.value)}/></Field></div></section>
-  </>;
+  const renderHandover = () => {
+    const awardSources = project.handover.awardSourceIds
+      .map((id) => project.sources.find((source) => source.id === id))
+      .filter((source): source is SourceDocument => Boolean(source));
+    const bidRecords = handoverBidRecords();
+    const bidSourceIds = [...new Set(bidRecords.map(({ record }) => record.sourceId))];
+    const allAwardSelected = awardSources.length > 0 && awardSources.every((source) => project.handover.selectedAwardSourceIds.includes(source.id));
+    const allBidSelected = bidSourceIds.length > 0 && bidSourceIds.every((id) => !project.handover.excludedBidSourceIds.includes(id));
 
-  const renderOutputs = () => <>
-    <section className="work-section"><div className="section-heading"><div><p>{t.localWorkspaceEyebrow}</p><h2>{locale === "zh" ? "本地项目目录" : "Local project folder"}</h2></div><span>{directoryHandle?.name || (supportsDirectoryAccess() ? t.ready : "ZIP")}</span></div><div className="output-actions"><button type="button" onClick={() => void chooseDirectory()}><FolderOpen size={18}/>{t.directory}</button><button type="button" disabled={!directoryHandle || busy} onClick={() => void syncDirectory()}><Save size={18}/>{t.sync}</button><button type="button" disabled={!directoryHandle || busy} onClick={() => void rescanDirectory()}><RefreshCw size={18}/>{t.rescan}</button><button type="button" onClick={() => archiveInput.current?.click()}><FileArchive size={18}/>{t.importZip}</button><input ref={archiveInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void importArchive(event.target.files?.[0])}/></div></section>
-    <section className="work-section"><div className="section-heading"><div><p>{t.formalOutputsEyebrow}</p><h2>{locale === "zh" ? "正式文件导出" : "Formal file exports"}</h2></div></div><div className="format-grid"><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.md`, projectToMarkdown(project), "text/markdown;charset=utf-8")}><FileText/><strong>Markdown</strong><span>.md</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}-requirements.csv`, projectToCsv(project), "text/csv;charset=utf-8")}><FileSpreadsheet/><strong>CSV</strong><span>UTF-8 BOM</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.docx`, projectToDocx(project), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")}><FileText/><strong>Word</strong><span>.docx</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.xlsx`, projectToXlsx(project), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}><FileSpreadsheet/><strong>Excel</strong><span>.xlsx</span></button><button type="button" disabled={busy} onClick={() => void saveOutput(`${projectFileStem(project)}.pptx`, projectToPptx(project), "application/vnd.openxmlformats-officedocument.presentationml.presentation")}><Presentation/><strong>PowerPoint</strong><span>.pptx</span></button><button type="button" disabled={busy} onClick={() => void saveOutput("presentation.md", presentationMarkdown(project), "text/markdown;charset=utf-8")}><Presentation/><strong>{locale === "zh" ? "演示中间稿" : "Presentation source"}</strong><span>presentation.md</span></button></div><label className="include-sources"><input type="checkbox" checked={includeSources} onChange={(event) => setIncludeSources(event.target.checked)}/><span><Check size={14}/></span>{t.includeSources}</label><button className="primary-export" type="button" disabled={busy} onClick={() => void exportArchive()}><Archive size={19}/>{t.exportZip}</button></section>
-    <section className="work-section task-section"><div><div className="section-heading"><div><p>{t.codexEyebrow}</p><h2>{t.taskPrompt}</h2></div></div><div className="segmented"><button type="button" className={taskKind === "workflow" ? "active" : ""} onClick={() => setTaskKind("workflow")}>solution-workflow</button><button type="button" className={taskKind === "extract" ? "active" : ""} onClick={() => setTaskKind("extract")}>tender-requirement-extraction</button><button type="button" className={taskKind === "bid" ? "active" : ""} onClick={() => setTaskKind("bid")}>technical-bid-package</button></div><textarea className="task-prompt" rows={8} readOnly value={taskPrompt}/><button className="command-button" type="button" onClick={() => void navigator.clipboard.writeText(taskPrompt).then(() => setNotice(locale === "zh" ? "任务已复制。" : "Task copied."))}><Copy size={17}/>{t.copyTask}</button><p className="skill-hint">{t.skillHint}</p></div><aside className="skill-downloads"><p>{t.downloadsEyebrow}</p><h2>{t.skillDownloads}</h2>{["solution-workflow", "tender-requirement-extraction", "technical-bid-package"].map((skill) => <a href={`${base}/downloads/skills/${skill}-1.0.0.zip`} download key={skill}><Download size={17}/><span>{skill}</span></a>)}</aside></section>
-    <section className="work-section"><div className="section-heading"><div><p>{t.qualityEyebrow}</p><h2>{t.audit}</h2></div><span className={issues.some((item) => item.severity === "error") ? "issue-count error" : "issue-count"}>{issues.length}</span></div>{issues.length ? <div className="issue-list">{issues.map((issue) => <div className={issue.severity} key={issue.id}><AlertTriangle size={17}/><span>{issue.message}</span><small>{issueAreaLabels[locale][issue.area]}</small></div>)}</div> : <div className="clean-state"><ShieldCheck size={26}/><p>{t.noIssues}</p></div>}</section>
-  </>;
+    return <>
+      <section className="work-section" id="handover-award">
+        <div className="section-heading"><div><p>{locale === "zh" ? "中标基线 / 补充资料" : "AWARD BASELINE / SUPPLEMENTS"}</p><h2>{locale === "zh" ? "中标补充内容" : "Award supplements"}</h2></div><span>{awardSources.length}</span></div>
+        <div className="handover-award-layout">
+          <div className="handover-source-panel">
+            <div className="handover-panel-heading"><strong>{locale === "zh" ? "中标函及相关资料" : "Award letter and related files"}</strong><label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传资料" : "Upload files"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importHandoverAwardFiles(event.target.files); event.currentTarget.value = ""; }}/></label></div>
+            {awardSources.length ? <>
+              <label className="compact-check handover-select-all"><input type="checkbox" checked={allAwardSelected} onChange={(event) => updateHandover({ selectedAwardSourceIds: event.target.checked ? awardSources.map((source) => source.id) : [] })}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label>
+              <div className="handover-source-list">{awardSources.map((source) => <div key={source.id}><label><input type="checkbox" checked={project.handover.selectedAwardSourceIds.includes(source.id)} onChange={(event) => updateHandover({ selectedAwardSourceIds: event.target.checked ? [...new Set([...project.handover.selectedAwardSourceIds, source.id])] : project.handover.selectedAwardSourceIds.filter((id) => id !== source.id) })}/><span><Check size={12}/></span><FileText size={16}/><strong>{source.name}</strong><small>{source.requiresOcr ? (locale === "zh" ? "需要 OCR" : "OCR required") : (locale === "zh" ? "可用于交底" : "Ready for handover")}</small></label><button type="button" aria-label={locale === "zh" ? `打开 ${source.name}` : `Open ${source.name}`} onClick={() => void openSourceFile(source)}><ExternalLink size={15}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除 ${source.name}` : `Delete ${source.name}`} onClick={() => void removeHandoverSource(source.id, "award")}><Trash2 size={15}/></button></div>)}</div>
+            </> : <div className="handover-empty-line"><FileInput size={20}/><span>{locale === "zh" ? "可上传中标函、合同技术附件、最终澄清函等资料。" : "Upload the award letter, contract technical annexes, or final clarifications."}</span></div>}
+          </div>
+          <ConfirmableTextarea fieldId="handover-award-notes" label={locale === "zh" ? "中标说明" : "Award notes"} locale={locale} rows={8} value={project.handover.awardNotes} confirmed={project.confirmedTextFields.includes("handover-award-notes")} onChange={(value) => updateHandover({ awardNotes: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed("handover-award-notes", confirmed)} placeholder={locale === "zh" ? "记录中标范围、合同技术边界、最终澄清结论和仍待确认事项" : "Record awarded scope, contract technical boundaries, final clarifications, and open questions"}/>
+        </div>
+      </section>
+
+      <section className="work-section" id="handover-checklist">
+        <div className="section-heading"><div><p>{locale === "zh" ? "责任分派 / 部门响应" : "ASSIGNMENT / DEPARTMENT RESPONSE"}</p><h2>{locale === "zh" ? "交底清单输出" : "Handover checklist"}</h2></div><span>{project.handover.tasks.length}</span></div>
+
+        <div className="handover-baseline">
+          <div><span>{locale === "zh" ? "项目名称" : "Project"}</span><strong>{project.name}</strong></div>
+          <div><span>{locale === "zh" ? "客户代称" : "Customer alias"}</span><strong>{project.customerAlias || (locale === "zh" ? "未填写" : "Not provided")}</strong></div>
+          <div><span>{locale === "zh" ? "行业" : "Industry"}</span><strong>{project.industry || (locale === "zh" ? "未填写" : "Not provided")}</strong></div>
+        </div>
+
+        <div className="handover-identifiers">
+          <Field label={locale === "zh" ? "交底清单编号" : "Handover checklist no."}><input value={project.handover.checklistNumber} onChange={(event) => updateHandover({ checklistNumber: event.target.value })}/></Field>
+          <Field label={locale === "zh" ? "项目编号" : "Project no."}><input value={project.handover.projectNumber} onChange={(event) => updateHandover({ projectNumber: event.target.value })}/></Field>
+        </div>
+
+        <div className="handover-subsection">
+          <div className="handover-panel-heading"><div><strong>{locale === "zh" ? "最终投标文件" : "Final bid files"}</strong><small>{locale === "zh" ? "已生成的投标文件默认全部参与任务分拆" : "Generated bid files are selected by default"}</small></div>{bidSourceIds.length > 0 && <label className="compact-check"><input type="checkbox" checked={allBidSelected} onChange={(event) => updateHandover({ excludedBidSourceIds: event.target.checked ? [] : bidSourceIds })}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label>}</div>
+          {bidRecords.length ? <div className="handover-bid-source-list">{bidRecords.map(({ item, record }) => <label key={record.id}><input type="checkbox" checked={!project.handover.excludedBidSourceIds.includes(record.sourceId)} onChange={(event) => updateHandover({ excludedBidSourceIds: event.target.checked ? project.handover.excludedBidSourceIds.filter((id) => id !== record.sourceId) : [...new Set([...project.handover.excludedBidSourceIds, record.sourceId])] })}/><span><Check size={12}/></span><FileCheck2 size={16}/><strong>{record.name}</strong><small>{item.title}</small></label>)}</div> : <div className="handover-empty-line"><FileOutput size={20}/><span>{locale === "zh" ? "投标阶段尚未生成文件，可先上传中标资料或填写中标说明。" : "No bid files have been generated. Add award materials or notes first."}</span></div>}
+        </div>
+
+        <ConfirmableTextarea fieldId="handover-temporary-changes" label={locale === "zh" ? "临时变更与补充说明" : "Temporary changes and supplementary notes"} locale={locale} rows={6} value={project.handover.temporaryChanges} confirmed={project.confirmedTextFields.includes("handover-temporary-changes")} onChange={(value) => updateHandover({ temporaryChanges: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed("handover-temporary-changes", confirmed)} placeholder={locale === "zh" ? "记录中标后新增或调整的事项；与投标文件冲突时，以此处说明为准" : "Record post-award changes. These notes take precedence over conflicting bid content"}/>
+
+        <div className="handover-subsection department-register">
+          <div className="handover-panel-heading"><div><strong>{locale === "zh" ? "部门与职责" : "Departments and responsibilities"}</strong><small>{locale === "zh" ? "定义职责边界及默认交付和响应方式，模型只会分配到这里列出的部门" : "Define ownership and default delivery behavior. The model assigns only to listed departments"}</small></div><button className="inline-command" type="button" onClick={addHandoverDepartment}><Plus size={16}/>{locale === "zh" ? "新增部门" : "Add department"}</button></div>
+          {project.handover.departments.length ? <div className="department-list">{project.handover.departments.map((department) => <article key={department.id}>
+            <div className="department-primary"><Field label={locale === "zh" ? "部门名称" : "Department"}><input value={department.name} onChange={(event) => updateHandoverDepartment(department.id, { name: event.target.value })}/></Field><Field label={locale === "zh" ? "部门负责人" : "Department owner"}><input value={department.owner} onChange={(event) => updateHandoverDepartment(department.id, { owner: event.target.value })}/></Field><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除部门 ${department.name}` : `Delete department ${department.name}`} onClick={() => removeHandoverDepartment(department)}><Trash2 size={16}/></button></div>
+            <ConfirmableTextarea fieldId={`handover-department-${department.id}`} label={locale === "zh" ? "职责与功能边界" : "Responsibility and function boundary"} locale={locale} rows={3} value={department.responsibility} confirmed={project.confirmedTextFields.includes(`handover-department-${department.id}`)} onChange={(value) => updateHandoverDepartment(department.id, { responsibility: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`handover-department-${department.id}`, confirmed)} placeholder={locale === "zh" ? "说明本部门负责的系统、设备、接口、现场工作或审核范围" : "Define the systems, equipment, interfaces, site work, or reviews owned by this department"}/>
+            <div className="department-defaults"><Field label={locale === "zh" ? "默认交付类型" : "Default deliverable"}><select value={department.defaultDeliverableType} onChange={(event) => updateHandoverDepartment(department.id, { defaultDeliverableType: event.target.value as HandoverDeliverableType })}>{Object.entries(handoverDeliverableLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field><Field label={locale === "zh" ? "默认响应方式" : "Default response"}><select value={department.defaultResponseMethod} onChange={(event) => updateHandoverDepartment(department.id, { defaultResponseMethod: event.target.value as HandoverResponseMethod })}>{Object.entries(handoverResponseLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field></div>
+          </article>)}</div> : <div className="handover-empty-line"><BriefcaseBusiness size={20}/><span>{locale === "zh" ? "先添加实际参与部门，再由模型按职责拆分任务。" : "Add the participating departments before using the model to split tasks."}</span></div>}
+        </div>
+
+        <div className="handover-split-actions"><button className="generate-command" type="button" disabled={busy} onClick={startHandoverTaskSplit}><Sparkles size={18}/>{generatingActionId === "handover-task-split" ? (locale === "zh" ? "正在分拆…" : "Splitting…") : (locale === "zh" ? "任务分拆" : "Split tasks")}</button><button className="inline-command" type="button" onClick={() => void addHandoverTask()}><Plus size={16}/>{locale === "zh" ? "手动新增任务" : "Add task manually"}</button>{project.handover.lastSplitAt && <small>{locale === "zh" ? "上次分拆" : "Last split"} · {new Date(project.handover.lastSplitAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")} · {project.handover.lastSplitProvider} / {project.handover.lastSplitModel}</small>}</div>
+
+        {project.handover.tasks.length ? <div className="handover-task-list">{project.handover.tasks.map((task, index) => {
+          const expanded = expandedHandoverTaskId === task.id;
+          const department = project.handover.departments.find((item) => item.id === task.departmentId);
+          const responseSources = task.responseSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
+          const showFiles = task.responseMethod === "file" || task.responseMethod === "mixed";
+          const showReport = task.responseMethod === "report" || task.responseMethod === "confirmation" || task.responseMethod === "mixed";
+          const showPath = task.responseMethod === "path" || task.responseMethod === "mixed";
+          return <article className={expanded ? "expanded" : ""} key={task.id} id={`handover-task-${task.id}`}>
+            <header><button type="button" onClick={() => setExpandedHandoverTaskId(expanded ? "" : task.id)}><span>{String(index + 1).padStart(2, "0")}</span><div><strong>{task.title || (locale === "zh" ? "未命名交底任务" : "Untitled handover task")}</strong><small>{department?.name || (locale === "zh" ? "未分配部门" : "Unassigned")} · {handoverDeliverableLabels[locale][task.deliverableType]} · {handoverTaskStatusLabels[locale][task.status]}</small></div><ChevronRight size={18}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除任务 ${task.title}` : `Delete task ${task.title}`} onClick={() => void removeHandoverTask(task)}><Trash2 size={16}/></button></header>
+            {expanded && <div className="handover-task-editor">
+              <div className="handover-task-core"><Field label={locale === "zh" ? "任务名称" : "Task name"}><input value={task.title} onChange={(event) => updateHandoverTask(task.id, { title: event.target.value })}/></Field><Field label={locale === "zh" ? "责任部门" : "Department"}><select value={task.departmentId} onChange={(event) => { const nextDepartment = project.handover.departments.find((item) => item.id === event.target.value); updateHandoverTask(task.id, { departmentId: event.target.value, owner: task.owner || nextDepartment?.owner || "" }); }}><option value="">{locale === "zh" ? "请选择" : "Select"}</option>{project.handover.departments.map((item) => <option value={item.id} key={item.id}>{item.name || (locale === "zh" ? "未命名部门" : "Unnamed department")}</option>)}</select></Field><Field label={locale === "zh" ? "负责人" : "Owner"}><input value={task.owner} onChange={(event) => updateHandoverTask(task.id, { owner: event.target.value })}/></Field><Field label={locale === "zh" ? "截止时间" : "Due date"}><LocalizedTemporalInput type="date" locale={locale} ariaLabel={locale === "zh" ? "截止时间" : "Due date"} value={task.dueDate} onChange={(value) => updateHandoverTask(task.id, { dueDate: value })}/></Field></div>
+              <ConfirmableTextarea fieldId={`handover-task-scope-${task.id}`} label={locale === "zh" ? "任务范围" : "Task scope"} locale={locale} rows={4} value={task.scope} confirmed={project.confirmedTextFields.includes(`handover-task-scope-${task.id}`)} onChange={(value) => updateHandoverTask(task.id, { scope: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`handover-task-scope-${task.id}`, confirmed)}/>
+              <div className="handover-task-core"><Field label={locale === "zh" ? "交付类型" : "Deliverable type"}><select value={task.deliverableType} onChange={(event) => updateHandoverTask(task.id, { deliverableType: event.target.value as HandoverDeliverableType })}>{Object.entries(handoverDeliverableLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field><Field label={locale === "zh" ? "响应方式" : "Response method"}><select value={task.responseMethod} onChange={(event) => updateHandoverTask(task.id, { responseMethod: event.target.value as HandoverResponseMethod })}>{Object.entries(handoverResponseLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field><Field label={locale === "zh" ? "交付物名称" : "Deliverable name"}><input value={task.deliverableName} onChange={(event) => updateHandoverTask(task.id, { deliverableName: event.target.value })}/></Field><Field label={locale === "zh" ? "任务状态" : "Task status"}><select value={task.status} onChange={(event) => updateHandoverTask(task.id, { status: event.target.value as HandoverTaskStatus })}>{Object.entries(handoverTaskStatusLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select></Field></div>
+              <div className="handover-task-notes"><ConfirmableTextarea fieldId={`handover-task-dependency-${task.id}`} label={locale === "zh" ? "前置依赖" : "Dependencies"} locale={locale} rows={3} value={task.dependencyNotes} confirmed={project.confirmedTextFields.includes(`handover-task-dependency-${task.id}`)} onChange={(value) => updateHandoverTask(task.id, { dependencyNotes: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`handover-task-dependency-${task.id}`, confirmed)}/><ConfirmableTextarea fieldId={`handover-task-acceptance-${task.id}`} label={locale === "zh" ? "验收标准" : "Acceptance criteria"} locale={locale} rows={3} value={task.acceptanceCriteria} confirmed={project.confirmedTextFields.includes(`handover-task-acceptance-${task.id}`)} onChange={(value) => updateHandoverTask(task.id, { acceptanceCriteria: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`handover-task-acceptance-${task.id}`, confirmed)}/></div>
+              {task.sourceIds.length > 0 && <div className="handover-task-basis"><strong>{locale === "zh" ? "任务依据" : "Task basis"}</strong>{task.sourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source)).map((source) => <span key={source.id}><FileText size={14}/>{source.name}</span>)}</div>}
+              <div className="department-response"><div className="handover-panel-heading"><div><strong>{locale === "zh" ? "部门响应" : "Department response"}</strong><small>{handoverResponseLabels[locale][task.responseMethod]}</small></div></div>
+                {showReport && <ConfirmableTextarea fieldId={`handover-task-response-${task.id}`} label={task.responseMethod === "confirmation" ? (locale === "zh" ? "确认说明" : "Confirmation note") : (locale === "zh" ? "响应报告" : "Response report")} locale={locale} rows={4} value={task.responseText} confirmed={project.confirmedTextFields.includes(`handover-task-response-${task.id}`)} onChange={(value) => updateHandoverTask(task.id, { responseText: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed(`handover-task-response-${task.id}`, confirmed)}/>}
+                {showPath && <Field label={locale === "zh" ? "软件包、仓库或受控路径" : "Package, repository, or controlled path"} wide><input value={task.responsePath} onChange={(event) => updateHandoverTask(task.id, { responsePath: event.target.value })} placeholder={locale === "zh" ? "填写版本、仓库地址、共享目录或制品库路径" : "Record version, repository URL, shared folder, or artifact path"}/></Field>}
+                {showFiles && <div className="handover-response-files"><label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传响应文件" : "Upload response files"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importHandoverResponseFiles(task, event.target.files); event.currentTarget.value = ""; }}/></label>{responseSources.map((source) => <div key={source.id}><button type="button" onClick={() => void openSourceFile(source)}><FileCheck2 size={15}/><span>{source.name}</span><ExternalLink size={14}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除响应文件 ${source.name}` : `Delete response file ${source.name}`} onClick={() => void removeHandoverSource(source.id, "response", task.id)}><Trash2 size={14}/></button></div>)}</div>}
+              </div>
+            </div>}
+          </article>;
+        })}</div> : <div className="empty-state"><ClipboardCheck size={26}/><p>{locale === "zh" ? "配置部门后运行任务分拆，或手动新增交底任务。" : "Configure departments, then split tasks with the model or add tasks manually."}</p></div>}
+      </section>
+    </>;
+  };
+
+  const renderProjectSettings = () => {
+    const templateRows: Array<{ format: GeneralTemplateFormat; label: string; accept: string }> = [
+      { format: "docx", label: "Word", accept: ".docx" },
+      { format: "xlsx", label: "Excel", accept: ".xlsx" },
+      { format: "pptx", label: "PowerPoint", accept: ".pptx" },
+    ];
+    return <section className="project-settings-panel" aria-label={locale === "zh" ? "项目设置" : "Project settings"}>
+      <div className="project-settings-heading"><div><p>PROJECT SETTINGS / LOCAL FILES</p><h2>{locale === "zh" ? "项目设置" : "Project settings"}</h2></div><button className="row-delete" type="button" aria-label={locale === "zh" ? "关闭项目设置" : "Close project settings"} onClick={() => setProjectSettingsOpen(false)}><X size={18}/></button></div>
+      <div className="project-path-settings">
+        <label><span>{locale === "zh" ? "项目路径" : "Project folder"}</span><input readOnly disabled={Boolean(directoryHandle)} value={directoryHandle?.name || ""} placeholder={locale === "zh" ? "尚未选择" : "Not selected"}/></label>
+        <div className="project-path-actions">
+          <button type="button" disabled={Boolean(directoryHandle) || busy} onClick={() => void chooseDirectory("select")}><FolderOpen size={17}/>{locale === "zh" ? "选择" : "Choose"}</button>
+          <button type="button" disabled={!directoryHandle || busy} onClick={() => void chooseDirectory("migrate")}><RefreshCw size={17}/>{locale === "zh" ? "修改" : "Change"}</button>
+        </div>
+      </div>
+      <div className="project-directory-utilities">
+        <button type="button" disabled={!directoryHandle || busy} onClick={() => void syncDirectory()}><Save size={17}/>{locale === "zh" ? "写入目录" : "Write to folder"}</button>
+        <button type="button" disabled={!directoryHandle || busy} onClick={() => void rescanDirectory()}><RefreshCw size={17}/>{locale === "zh" ? "重新扫描" : "Rescan"}</button>
+        <button type="button" onClick={() => openGuardedFilePicker(archiveInput.current)}><FileArchive size={17}/>{t.importZip}</button>
+        <input ref={archiveInput} hidden type="file" accept=".zip,application/zip" onChange={(event) => void importArchive(event.target.files?.[0])}/>
+      </div>
+      <div className="general-template-settings">
+        <div><p>{locale === "zh" ? "通用文件模板" : "General file templates"}</p><span>{locale === "zh" ? "仅复用版式和视觉样式；模板正文、数据、示例与指令不会参与内容生成。模块内模板优先于这里的通用模板。" : "Only layout and visual styling are reused. Template text, data, examples, and instructions never participate in content generation. Module templates take priority."}</span></div>
+        <div className="general-template-grid">{templateRows.map(({ format, label, accept }) => {
+          const sourceId = generalTemplateSourceId(project, format);
+          const source = project.sources.find((candidate) => candidate.id === sourceId);
+          const Icon = format === "xlsx" ? FileSpreadsheet : format === "pptx" ? Presentation : FileText;
+          return <article key={format}><Icon size={20}/><div><strong>{label}</strong><span title={source?.name}>{source?.name || (locale === "zh" ? "未上传" : "Not uploaded")}</span></div><label className="file-command"><Upload size={16}/>{source ? (locale === "zh" ? "替换" : "Replace") : (locale === "zh" ? "上传模板" : "Upload")}<input hidden type="file" accept={accept} onChange={(event) => { void uploadGeneralTemplate(format, event.target.files?.[0]); event.currentTarget.value = ""; }}/></label>{source && <button className="row-delete" type="button" aria-label={locale === "zh" ? `删除 ${label} 通用模板` : `Delete ${label} general template`} onClick={() => void removeGeneralTemplate(format)}><X size={15}/></button>}</article>;
+        })}</div>
+      </div>
+    </section>;
+  };
+
+  const renderOutputs = () => {
+    const allPaths = workspaceOutputFiles.map((file) => file.relativePath);
+    const allSelected = allPaths.length > 0 && allPaths.every((path) => selectedOutputPaths.has(path));
+    return <section className="work-section output-file-section">
+      <div className="section-heading output-file-heading">
+        <div><p>{locale === "zh" ? "项目文件 / 保留目录" : "PROJECT FILES / PRESERVE PATHS"}</p><h2>{locale === "zh" ? "输出文件" : "Output files"}</h2><span className="section-description">{locale === "zh" ? "从项目各阶段选择实际文件，输出时保留项目名称、阶段和模块目录。" : "Select actual project files and preserve the project, stage, and module folders in the output."}</span></div>
+        <button className="icon-command" type="button" disabled={!directoryHandle || busy || outputFilesLoading} aria-label={locale === "zh" ? "重新扫描输出文件" : "Rescan output files"} title={locale === "zh" ? "重新扫描" : "Rescan"} onClick={() => void refreshWorkspaceOutputFiles()}><RefreshCw size={18}/></button>
+      </div>
+
+      <div className="output-path-control">
+        <div><span>{locale === "zh" ? "输出路径" : "Output folder"}</span><strong>{outputDirectoryHandle?.name || (locale === "zh" ? "尚未设置" : "Not set")}</strong><small>{locale === "zh" ? "完整输出会在此目录下创建项目名称文件夹；ZIP 直接保存在此目录。" : "Complete output creates a project-named folder here; the ZIP is saved directly in this folder."}</small></div>
+        <button className="command-button" type="button" disabled={busy} onClick={() => void chooseOutputDirectory()}><FolderOpen size={18}/>{outputDirectoryHandle ? (locale === "zh" ? "修改路径" : "Change folder") : (locale === "zh" ? "选择路径" : "Choose folder")}</button>
+      </div>
+
+      <div className="output-selection-toolbar">
+        <label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? "选择所有输出文件" : "Select all output files"} disabled={!allPaths.length} checked={allSelected} onChange={(event) => setOutputPathsChecked(allPaths, event.target.checked)}/><span><Check size={13}/></span>{locale === "zh" ? "选择所有文件" : "Select all files"}</label>
+        <strong>{locale === "zh" ? `已选择 ${selectedOutputPaths.size} / ${workspaceOutputFiles.length}` : `${selectedOutputPaths.size} / ${workspaceOutputFiles.length} selected`}</strong>
+      </div>
+
+      {outputFilesLoading ? <div className="empty-state"><RefreshCw size={25}/><p>{locale === "zh" ? "正在扫描项目文件…" : "Scanning project files…"}</p></div> : outputGroups.length ? <div className="output-stage-list">{outputGroups.map((stage) => {
+        const stagePaths = stage.files.map((file) => file.relativePath);
+        const stageSelected = stagePaths.every((path) => selectedOutputPaths.has(path));
+        return <section className="output-stage-group" key={stage.path}>
+          <header><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `全选 ${stage.label}` : `Select all in ${stage.label}`} checked={stageSelected} onChange={(event) => setOutputPathsChecked(stagePaths, event.target.checked)}/><span><Check size={13}/></span><strong>{stage.label}</strong></label><span>{stage.files.length} {locale === "zh" ? "个文件" : "files"}</span></header>
+          <div>{stage.modules.map((module) => {
+            const modulePaths = module.files.map((file) => file.relativePath);
+            const moduleSelected = modulePaths.every((path) => selectedOutputPaths.has(path));
+            return <section className="output-module-group" key={module.path}>
+              <header><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `全选模块 ${module.label}` : `Select all in module ${module.label}`} checked={moduleSelected} onChange={(event) => setOutputPathsChecked(modulePaths, event.target.checked)}/><span><Check size={12}/></span><strong>{module.label}</strong></label><span>{module.files.length}</span></header>
+              <div className="output-file-list">{module.files.map((file) => {
+                const extension = file.name.split(".").pop()?.toLowerCase() || "";
+                const Icon = ["png", "jpg", "jpeg", "webp", "gif"].includes(extension) ? FileImage : ["xls", "xlsx", "csv"].includes(extension) ? FileSpreadsheet : ["zip", "7z", "rar"].includes(extension) ? FileArchive : FileText;
+                return <label key={file.relativePath}><input type="checkbox" aria-label={locale === "zh" ? `选择输出文件 ${file.relativePath}` : `Select output file ${file.relativePath}`} checked={selectedOutputPaths.has(file.relativePath)} onChange={(event) => setOutputPathsChecked([file.relativePath], event.target.checked)}/><span><Check size={12}/></span><Icon size={18}/><strong>{file.name}</strong><small>{formatFileSize(file.size)}</small></label>;
+              })}</div>
+            </section>;
+          })}</div>
+        </section>;
+      })}</div> : <div className="empty-state"><FileOutput size={26}/><p>{directoryHandle ? (locale === "zh" ? "项目各阶段暂时没有可输出的文件。" : "No project-stage files are available for output yet.") : (locale === "zh" ? "请先在“项目设置”中选择项目路径。" : "Choose a project folder in Project settings first.")}</p></div>}
+
+      <div className="output-export-actions">
+        <button className="command-button" type="button" disabled={busy || outputFilesLoading} onClick={() => void exportSelectedFiles("complete")}><FolderOpen size={19}/>{locale === "zh" ? "完整输出" : "Complete output"}</button>
+        <button className="primary-export" type="button" disabled={busy || outputFilesLoading} onClick={() => void exportSelectedFiles("zip")}><Archive size={19}/>{locale === "zh" ? "导出为 ZIP" : "Export as ZIP"}</button>
+      </div>
+    </section>;
+  };
 
   const content = view === "presales" ? renderPresales() : view === "requirements" ? renderRequirements() : view === "bid" ? renderBid() : view === "handover" ? renderHandover() : renderOutputs();
 
-  return <div className="solution-app" data-ready={ready ? "true" : "false"}>
+  return <div className="solution-app" data-ready={ready ? "true" : "false"} onClickCapture={guardFileImport}>
     <header className="project-header">
       <div><p>{t.workspaceEyebrow}</p><h1>{t.project}</h1><span>{project.name}</span></div>
       <div className="header-metrics"><div><strong>{coverage.total}</strong><span>{t.total}</span></div><div><strong>{coverage.evidenced}</strong><span>{t.evidenced}</span></div><div><strong>{coverage.approved}</strong><span>{t.approved}</span></div><div><strong>{coverage.pending}</strong><span>{t.pending}</span></div></div>
     </header>
     <div className="privacy-bar"><ShieldCheck size={17}/><span>{t.local}</span><span className="notice" aria-live="polite">{busy ? (locale === "zh" ? "处理中…" : "Working…") : notice}</span></div>
-    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.reset} onClick={resetCurrentProject} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className={`project-path-command${directoryHandle ? " active" : ""}`} type="button" disabled={busy} aria-label={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`} onClick={() => void chooseDirectory()} title={`${t.projectPath}${directoryHandle ? `: ${directoryHandle.name}` : ""}`}><FolderOpen size={17}/><span>{directoryHandle?.name || t.projectPath}</span></button><button className="toolbar-settings-start" type="button" aria-label={theme === "light" ? t.darkMode : t.lightMode} onClick={switchTheme} title={theme === "light" ? t.darkMode : t.lightMode}>{theme === "light" ? <Moon size={17}/> : <Sun size={17}/>}</button><button type="button" aria-label={locale === "zh" ? "Switch to English" : "切换到中文"} onClick={switchLocale} title={locale === "zh" ? "English" : "中文"}><Languages size={17}/><span>{locale === "zh" ? "EN" : "中"}</span></button></nav>
+    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.reset} onClick={resetCurrentProject} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className={`project-path-command${projectSettingsOpen ? " active" : ""}`} type="button" disabled={busy} aria-expanded={projectSettingsOpen} aria-label={t.projectPath} onClick={() => setProjectSettingsOpen((current) => !current)} title={t.projectPath}><FolderCog size={17}/><span>{t.projectPath}</span></button></nav>
+    {projectSettingsOpen && renderProjectSettings()}
     <div className="workspace-shell">
       <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status" data-stage={currentStage}><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][currentStage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
       <main className="workspace-content">{content}</main>
@@ -2171,6 +3366,34 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
           <button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => void rememberModelActionAndOpenSettings(pendingModelAction)}><Settings2 size={18}/>{locale === "zh" ? "是，前往配置" : "Yes, configure model"}</button>
           <button type="button" onClick={outputPendingModelTask}><FileText size={18}/>{locale === "zh" ? "否，输出任务" : "No, output task"}</button>
         </div>
+      </section>
+    </div>}
+    {pendingDirectoryChange && <div className="model-choice-backdrop">
+      <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="directory-change-title">
+        <p>PROJECT FOLDER / LOCAL MIGRATION</p>
+        <h2 id="directory-change-title">{pendingDirectoryChange.mode === "migrate"
+          ? (locale === "zh" ? "修改路径会迁移当前项目到新路径，可能会需要一些时间，请等候..." : "Changing the folder migrates the current project and may take some time. Please wait.")
+          : (locale === "zh" ? "选定路径后将创建项目文件夹，是否继续？" : "The project folder structure will be created in the selected folder. Continue?")}</h2>
+        <span>{pendingDirectoryChange.mode === "migrate"
+          ? (locale === "zh" ? `当前项目将迁移到“${pendingDirectoryChange.handle.name}”。迁移成功后只删除原路径中的工作台受管文件，不处理其他文件。` : `The project will move to “${pendingDirectoryChange.handle.name}”. Only workbench-managed files are removed from the old folder after a successful copy.`)
+          : (locale === "zh" ? "将创建：0_项目客户方资料、1_售前准备、2_招标要求、3_技术标组包、4_中标交底、5_输出文件。" : "Six managed stage folders will be created for customer materials, presales, tender, bid, handover, and outputs.")}</span>
+        <div><button className="model-choice-primary" type="button" onClick={() => void confirmDirectoryChange()}><Check size={18}/>{locale === "zh" ? "是，继续" : "Yes, continue"}</button><button type="button" onClick={() => setPendingDirectoryChange(null)}><X size={18}/>{locale === "zh" ? "否，取消" : "No, cancel"}</button></div>
+      </section>
+    </div>}
+    {projectPathRequired && <div className="model-choice-backdrop">
+      <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="project-path-required-title">
+        <p>PROJECT FOLDER / REQUIRED</p>
+        <h2 id="project-path-required-title">{t.projectPathRequired}</h2>
+        <span>{t.projectPathRequiredHint}</span>
+        <div><button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => setProjectPathRequired(false)}><Check size={18}/>{t.acknowledge}</button></div>
+      </section>
+    </div>}
+    {outputPathRequired && <div className="model-choice-backdrop">
+      <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="output-path-required-title">
+        <p>OUTPUT FOLDER / REQUIRED</p>
+        <h2 id="output-path-required-title">{locale === "zh" ? "未设置输出路径，请先选择输出路径。" : "No output folder is set. Choose an output folder first."}</h2>
+        <span>{locale === "zh" ? "当前输出操作已取消，已选择的文件保持不变。" : "The output was cancelled and the current file selection is preserved."}</span>
+        <div><button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => setOutputPathRequired(false)}><Check size={18}/>{t.acknowledge}</button></div>
       </section>
     </div>}
   </div>;

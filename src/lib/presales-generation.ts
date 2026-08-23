@@ -1,5 +1,7 @@
 import type { Locale, PresalesRound, PresalesRoundAction, ProjectManifest, SourceDocument } from "./workspace-schema";
 import type { ModelProvider, ModelSettings } from "./model-settings";
+import { applyFormatOnlyTemplate, FORMAT_ONLY_TEMPLATE_RULE_EN, FORMAT_ONLY_TEMPLATE_RULE_ZH } from "./format-templates";
+import { chineseInteger, presalesRoundDirectory } from "./workspace-storage";
 
 export { DEFAULT_MODEL_SETTINGS } from "./model-settings";
 export type { ModelProvider, ModelSettings } from "./model-settings";
@@ -32,7 +34,6 @@ export function buildCustomerNeedsAnalysisPrompt(
   locale: Locale = project.locale,
 ): string {
   const sourceContent = sources.map(sourceText).join("\n\n").slice(0, 60000);
-  const templateContent = templates.map(sourceText).join("\n\n").slice(0, 24000);
   const keywords = round.keywords.filter(Boolean);
   const participantLabels = locale === "zh" ? { customer: "客户", "third-party": "第三方", internal: "公司内人员" } : { customer: "Customer", "third-party": "Third party", internal: "Internal" };
   const participants = round.participants.map((participant) => `${participant.name} (${participantLabels[participant.category]})`).join(", ");
@@ -44,9 +45,9 @@ export function buildCustomerNeedsAnalysisPrompt(
       : "未指定关键词。请分析已选文件全文，覆盖核心需求、范围、约束、时间、交付、验收、风险和待确认事项。",
     `# 项目与沟通\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n沟通节点：${round.title}\n沟通时间：${round.meetingAt || "待确认"}\n参会人员：${participants || "待确认"}`,
     `# 分析要求\n${round.analysisRequirements || "按事实提炼客户需求、关键约束、证据位置和待确认事项。"}`,
-    `# 输出要求\n输出可直接进入人工审阅的 Markdown 正文。每个关键结论标注来源文件名和原始定位；扫描件或无可提取文本的文件标记为需要 OCR。${templates.length ? "参考所选模板的章节顺序、字段和表达方式组织内容，但不得因模板示例而补造客户事实。" : "未选择模板，请自行建立清晰、可复核的专业结构。"}`,
+    `# 输出要求\n输出可直接进入人工审阅的 Markdown 正文。每个关键结论标注来源文件名和原始定位；扫描件或无可提取文本的文件标记为需要 OCR。${templates.length ? `已选择 ${templates.length} 个格式模板，正文生成不得读取或模仿模板内容。` : "未选择模板，请自行建立清晰、可复核的专业结构。"}`,
+    `# 模板隔离规则\n${FORMAT_ONLY_TEMPLATE_RULE_ZH}`,
     `# 所选客户附件\n${sourceContent || "未选择附件"}`,
-    `# 所选模板\n${templateContent || "未选择模板"}`,
   ].join("\n\n");
 
   return [
@@ -57,9 +58,9 @@ export function buildCustomerNeedsAnalysisPrompt(
       : "No keywords were supplied. Analyze the full selected files, covering needs, scope, constraints, schedule, delivery, acceptance, risks, and open questions.",
     `# Project and communication\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nCommunication: ${round.title}\nTime: ${round.meetingAt || "To confirm"}\nParticipants: ${participants || "To confirm"}`,
     `# Analysis requirements\n${round.analysisRequirements || "Extract customer needs, key constraints, source locations, and open questions factually."}`,
-    `# Output requirements\nReturn review-ready Markdown. Cite the source file and original locator for each material finding. Mark scanned or textless files as OCR required.${templates.length ? " Follow the selected template's section order, fields, and writing pattern without treating template examples as customer facts." : " No template is selected; create a clear, reviewable professional structure."}`,
+    `# Output requirements\nReturn review-ready Markdown. Cite the source file and original locator for each material finding. Mark scanned or textless files as OCR required.${templates.length ? ` ${templates.length} format template(s) are selected; do not read or imitate their content while drafting.` : " No template is selected; create a clear, reviewable professional structure."}`,
+    `# Template isolation rule\n${FORMAT_ONLY_TEMPLATE_RULE_EN}`,
     `# Selected customer attachments\n${sourceContent || "No attachments selected"}`,
-    `# Selected templates\n${templateContent || "No templates selected"}`,
   ].join("\n\n");
 }
 
@@ -79,7 +80,6 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
   const selectedIds = new Set([
     ...round.requirementSourceIds,
     ...round.referenceSourceIds,
-    ...(targetAction?.selectedTemplateSourceIds ?? []),
   ]);
   const selectedSources = project.sources.filter((source) => selectedIds.has(source.id));
   const priorRounds = project.presalesRounds.slice(0, Math.max(0, roundIndex));
@@ -101,26 +101,28 @@ export function buildPresalesPrompt(project: ProjectManifest, round: PresalesRou
   if (locale === "zh") return [
     "你是企业解决方案售前负责人。只根据以下项目边界、沟通记录和已选资料编制本轮客户响应文件。",
     "不得虚构产品参数、案例、承诺、价格、资质或交付能力。资料缺失时明确写“待确认”，并列出需要谁确认。",
+    FORMAT_ONLY_TEMPLATE_RULE_ZH,
     "输出可直接进入人工审阅的 Markdown 正文，不解释你的推理过程，不使用营销口号。",
     `# 项目与边界\n项目：${project.name}\n客户：${project.customerAlias || "待确认"}\n行业：${project.industry || "待确认"}\n责任人：${project.owner || "待确认"}\n预算：${project.budget || "待确认"}\n截止日期：${project.deadline || "待确认"}\n业务目标：${project.objective || "待确认"}\n约束：${project.constraints || "待确认"}`,
     `# 本轮沟通\n节点：${round.title}\n时间：${round.meetingAt || "待确认"}\n参会人员：${participants || "待确认"}\n客户信息及需求：\n${round.customerNeeds || "待确认"}`,
     `# 本轮执行清单\n${actions || "暂无"}`,
     targetAction ? `# 当前响应文件\n文件名：${target?.name || "待填写"}\n格式：${target?.format ? target.format.toUpperCase() : "待选择"}\n责任人：${targetAction.owner || "待确认"}\n截止日期：${targetAction.dueDate || "待确认"}\n文件状态：${targetAction.status}\n文件要求：\n${targetAction.fileRequirements || targetAction.title || "待填写"}` : "",
     `# 之前轮次\n${history || "无"}`,
-    `# 已选企业资料、客户附件与模板内容\n${references || "未选择资料"}`,
+    `# 已选企业资料与客户附件\n${references || "未选择资料"}`,
     `# 补充生成要求\n${round.generationInstructions || "无"}`,
   ].join("\n\n");
 
   return [
     "You are the presales solution owner. Draft this round's customer response using only the project boundary, communication history, and selected sources below.",
     "Do not invent product parameters, references, commitments, prices, qualifications, or delivery capability. Mark missing facts as 'To confirm' and name the responsible party.",
+    FORMAT_ONLY_TEMPLATE_RULE_EN,
     "Return review-ready Markdown only. Do not explain your reasoning or use promotional language.",
     `# Project boundary\nProject: ${project.name}\nCustomer: ${project.customerAlias || "To confirm"}\nIndustry: ${project.industry || "To confirm"}\nOwner: ${project.owner || "To confirm"}\nBudget: ${project.budget || "To confirm"}\nDeadline: ${project.deadline || "To confirm"}\nObjective: ${project.objective || "To confirm"}\nConstraints: ${project.constraints || "To confirm"}`,
     `# Current communication\nNode: ${round.title}\nTime: ${round.meetingAt || "To confirm"}\nParticipants: ${participants || "To confirm"}\nCustomer information and needs:\n${round.customerNeeds || "To confirm"}`,
     `# Current action list\n${actions || "None"}`,
     targetAction ? `# Current response file\nFile name: ${target?.name || "To confirm"}\nFormat: ${target?.format ? target.format.toUpperCase() : "To select"}\nOwner: ${targetAction.owner || "To confirm"}\nDue date: ${targetAction.dueDate || "To confirm"}\nFile status: ${targetAction.status}\nFile requirements:\n${targetAction.fileRequirements || targetAction.title || "To confirm"}` : "",
     `# Previous rounds\n${history || "None"}`,
-    `# Selected company materials, customer attachments, and template content\n${references || "No sources selected"}`,
+    `# Selected company materials and customer attachments\n${references || "No sources selected"}`,
     `# Additional generation instructions\n${round.generationInstructions || "None"}`,
   ].join("\n\n");
 }
@@ -171,7 +173,10 @@ export function buildCodexCustomerAnalysisTask(
   locale: Locale = project.locale,
 ): { name: string; content: string; outputName: string } {
   if (!round.analysisOutputFormat) throw new Error("ANALYSIS_OUTPUT_FORMAT_REQUIRED");
-  const baseName = analysisResultBaseName(round.keywords, locale);
+  const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
+  const baseName = locale === "zh"
+    ? `第${chineseInteger(roundIndex + 1)}次沟通需求分析`
+    : `Communication ${roundIndex + 1} requirements analysis`;
   let resultName = baseName;
   let sequence = 2;
   while (round.analysisResults.some((result) => result.name === resultName)) {
@@ -181,12 +186,10 @@ export function buildCodexCustomerAnalysisTask(
   const outputName = safeGeneratedFileName(resultName, round.analysisOutputFormat);
   const taskName = `presales-analysis-${round.id}-${outputName.replace(/\.[^.]+$/, "")}.md`.replace(/[\\/:*?"<>|]+/g, "-");
   const prompt = buildCustomerNeedsAnalysisPrompt(project, round, sources, templates, locale);
-  const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
-  const outputFolder = (locale === "zh"
-    ? `售前阶段-第${roundIndex + 1}次沟通-分析要求`
-    : `Presales-Communication-${roundIndex + 1}-Analysis`).replace(/[\\/:*?"<>|\s]+/g, "-");
-  const relativePath = `projects/${project.id}/outputs/${outputFolder}/${outputName}`;
+  const relativePath = `${presalesRoundDirectory(roundIndex)}/需求分析/${outputName}`;
   const sourceLocator = round.analysisOutputFormat === "pptx" ? "slide" : round.analysisOutputFormat === "docx" ? "paragraph" : "line";
+  const sourcePaths = sources.map((source) => `- ${source.workspacePath || `projects/${project.id}/sources/${source.name}`}`).join("\n") || "- 未选择输入文件";
+  const templatePaths = templates.map((source) => `- ${source.workspacePath || `projects/${project.id}/sources/${source.name}`}`).join("\n") || "- 未选择模板";
 
   if (locale === "zh") return {
     name: taskName,
@@ -198,18 +201,22 @@ export function buildCodexCustomerAnalysisTask(
       "",
       "## 路径",
       `- 项目：projects/${project.id}`,
-      `- 输入资料：projects/${project.id}/sources`,
+      "- 输入资料：",
+      sourcePaths,
+      "- 格式模板：",
+      templatePaths,
       `- 输出文件：${relativePath}`,
       `- 项目清单：projects/${project.id}/project.json`,
       "",
       "## 执行要求",
-      `1. 根据下方任务正文生成 ${round.analysisOutputFormat.toUpperCase()} 分析文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。`,
+      `1. 根据下方任务正文生成 ${round.analysisOutputFormat.toUpperCase()} 分析文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。${FORMAT_ONLY_TEMPLATE_RULE_ZH}`,
       "2. 只使用任务正文和项目目录中的资料；无法核验的参数、日期、资质、评分规则、价格和承诺标为待确认。",
       "3. 生成后计算输出文件 SHA-256，并在 project.json 的 sources 中增加对应来源记录。",
       `4. 在本轮 analysisResults 中增加记录：name 为 ${resultName}，provider 为 codex，model 写实际使用的 Codex 模型，relativePath 为 ${relativePath}。`,
       `5. 记录当前 prompt、keywords、sourceIds 和 templateSourceIds；来源摘要的 locatorKind 使用 ${sourceLocator}。`,
-      "6. 更新 project.json 的 updatedAt，并用项目现有 Zod 结构或测试校验。不得删除用户已有数据。",
-      "7. 完成后报告输出路径、校验结果、证据缺口和仍需人工确认的事项。",
+      "6. 在同一需求分析目录中，仅当内容非空时分别保存关键词.txt 和分析要求.txt。跨目录引用项目已有文件时写说明文档.txt，不复制原文件。",
+      "7. 更新 project.json 的 updatedAt，并用项目现有 Zod 结构或测试校验。不得删除用户已有数据。",
+      "8. 完成后报告输出路径、校验结果、证据缺口和仍需人工确认的事项。",
       "",
       "## 任务正文",
       "```text",
@@ -229,18 +236,22 @@ export function buildCodexCustomerAnalysisTask(
       "",
       "## Paths",
       `- Project: projects/${project.id}`,
-      `- Inputs: projects/${project.id}/sources`,
+      "- Inputs:",
+      sourcePaths,
+      "- Format templates:",
+      templatePaths,
       `- Output: ${relativePath}`,
       `- Manifest: projects/${project.id}/project.json`,
       "",
       "## Execution requirements",
-      `1. Generate a ${round.analysisOutputFormat.toUpperCase()} analysis file from the task body below. Use document or presentation tooling for formatting and visual QA when required.`,
+      `1. Generate a ${round.analysisOutputFormat.toUpperCase()} analysis file from the task body below. Use document or presentation tooling for formatting and visual QA when required. ${FORMAT_ONLY_TEMPLATE_RULE_EN}`,
       "2. Use only the task body and project files. Mark unsupported parameters, dates, qualifications, scoring rules, prices, and commitments as To confirm.",
       "3. Calculate the output SHA-256 and append a matching source record to project.json.",
       `4. Append an analysisResults record to this round with name ${resultName}, provider codex, the actual Codex model name, and relativePath ${relativePath}.`,
       `5. Preserve the current prompt, keywords, sourceIds, and templateSourceIds. Use ${sourceLocator} as locatorKind for the output summary.`,
-      "6. Update project.json updatedAt and validate it against the existing Zod schema or tests. Preserve all user-authored data.",
-      "7. Report the output path, validation result, evidence gaps, and every item requiring human review.",
+      "6. In the same analysis folder, save keywords.txt and analysis-requirements.txt only when their content is non-empty. For a project file referenced across folders, write a reference note instead of copying the source file.",
+      "7. Update project.json updatedAt and validate it against the existing Zod schema or tests. Preserve all user-authored data.",
+      "8. Report the output path, validation result, evidence gaps, and every item requiring human review.",
       "",
       "## Task body",
       "```text",
@@ -251,7 +262,7 @@ export function buildCodexCustomerAnalysisTask(
   };
 }
 
-export function buildCodexPresalesTask(project: ProjectManifest, round: PresalesRound, action: PresalesRoundAction, locale: Locale = project.locale): { name: string; content: string; outputName: string } {
+export function buildCodexPresalesTask(project: ProjectManifest, round: PresalesRound, action: PresalesRoundAction, locale: Locale = project.locale, templates: SourceDocument[] = []): { name: string; content: string; outputName: string } {
   const target = getActionResponseTarget(round, action);
   if (!target.name || !target.format) throw new Error("RESPONSE_FILE_CONFIG_REQUIRED");
   const outputName = safeGeneratedFileName(target.name, target.format);
@@ -259,6 +270,13 @@ export function buildCodexPresalesTask(project: ProjectManifest, round: Presales
   const taskName = `presales-${round.id}-${action.id}-${taskStem}.md`.replace(/[\\/:*?"<>|]+/g, "-");
   const prompt = buildPresalesPrompt(project, round, locale, action);
   const sourceLocator = target.format === "pptx" ? "slide" : target.format === "docx" ? "paragraph" : "line";
+  const templatePaths = templates.map((source) => `- ${source.workspacePath || `projects/${project.id}/sources/${source.name}`}`).join("\n") || "- 未选择模板";
+  const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
+  const outputPath = `${presalesRoundDirectory(roundIndex)}/生成文件/${outputName}`;
+  const sourceIds = new Set([...(round.selectedRequirementSourceIds || round.requirementSourceIds), ...round.referenceSourceIds]);
+  const sourcePaths = project.sources.filter((source) => sourceIds.has(source.id))
+    .map((source) => `- ${source.workspacePath || `projects/${project.id}/sources/${source.name}`}`)
+    .join("\n") || "- 未选择输入文件";
 
   if (locale === "zh") return {
     name: taskName,
@@ -270,17 +288,21 @@ export function buildCodexPresalesTask(project: ProjectManifest, round: Presales
       "",
       "## 路径",
       `- 项目：projects/${project.id}`,
-      `- 输入资料：projects/${project.id}/sources`,
-      `- 输出文件：projects/${project.id}/outputs/${outputName}`,
+      "- 输入资料：",
+      sourcePaths,
+      "- 格式模板：",
+      templatePaths,
+      `- 输出文件：${outputPath}`,
       `- 项目清单：projects/${project.id}/project.json`,
       "",
       "## 执行要求",
-      `1. 根据下方任务正文生成 ${target.format.toUpperCase()} 文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。`,
+      `1. 根据下方任务正文生成 ${target.format.toUpperCase()} 文件；需要时使用文档或演示文稿工具完成格式化和视觉检查。${FORMAT_ONLY_TEMPLATE_RULE_ZH}`,
       "2. 只使用任务正文和项目目录中的资料。缺少依据的参数、案例、价格、资质和承诺一律标为待确认。",
       "3. 生成后计算输出文件 SHA-256，在 project.json 的 sources 中增加对应来源记录；fileType 使用输出格式，segments 至少保留一条可定位摘要。",
-      `4. 在本轮 generatedFiles 中增加记录：actionId 为 ${action.id}，provider 为 codex，model 写实际使用的 Codex 模型，relativePath 为 projects/${project.id}/outputs/${outputName}。`,
-      "5. 更新 project.json 的 updatedAt，并用项目现有 Zod 结构或测试校验。不得删除其他轮次或用户已有数据。",
-      `6. 来源片段的 locatorKind 使用 ${sourceLocator}。完成后报告输出路径、校验结果和仍需人工确认的事项。`,
+      `4. 在本轮 generatedFiles 中增加记录：actionId 为 ${action.id}，provider 为 codex，model 写实际使用的 Codex 模型，relativePath 为 ${outputPath}。`,
+      "5. 在生成文件目录中保存同名文件信息文本，记录项目负责人、截止时间、文件状态和文件要求；跨目录引用项目已有文件时写说明文档.txt，不复制原文件。",
+      "6. 更新 project.json 的 updatedAt，并用项目现有 Zod 结构或测试校验。不得删除其他轮次或用户已有数据。",
+      `7. 来源片段的 locatorKind 使用 ${sourceLocator}。完成后报告输出路径、校验结果和仍需人工确认的事项。`,
       "",
       "## 任务正文",
       "```text",
@@ -300,17 +322,21 @@ export function buildCodexPresalesTask(project: ProjectManifest, round: Presales
       "",
       "## Paths",
       `- Project: projects/${project.id}`,
-      `- Inputs: projects/${project.id}/sources`,
-      `- Output: projects/${project.id}/outputs/${outputName}`,
+      "- Inputs:",
+      sourcePaths,
+      "- Format templates:",
+      templatePaths,
+      `- Output: ${outputPath}`,
       `- Manifest: projects/${project.id}/project.json`,
       "",
       "## Execution requirements",
-      `1. Generate a ${target.format.toUpperCase()} file from the task body below. Use document or presentation tooling when formatting and visual QA are required.`,
+      `1. Generate a ${target.format.toUpperCase()} file from the task body below. Use document or presentation tooling when formatting and visual QA are required. ${FORMAT_ONLY_TEMPLATE_RULE_EN}`,
       "2. Use only the task body and files in the project folder. Mark unsupported parameters, references, prices, qualifications, and commitments as To confirm.",
       "3. Calculate the output SHA-256 and append a matching source record to project.json. Use the output format as fileType and preserve at least one locatable summary segment.",
-      `4. Append a generatedFiles record to this round with actionId ${action.id}, provider codex, the actual Codex model name, and relativePath projects/${project.id}/outputs/${outputName}.`,
-      "5. Update project.json updatedAt and validate it against the existing Zod schema or tests. Preserve every existing round and user-authored field.",
-      `6. Use ${sourceLocator} as locatorKind for the output summary. Report the output path, validation result, and every item still requiring human review.`,
+      `4. Append a generatedFiles record to this round with actionId ${action.id}, provider codex, the actual Codex model name, and relativePath ${outputPath}.`,
+      "5. In the generated-files folder, save a matching metadata text file with owner, due date, status, and file requirements. For project files referenced across folders, write a reference note instead of copying the source file.",
+      "6. Update project.json updatedAt and validate it against the existing Zod schema or tests. Preserve every existing round and user-authored field.",
+      `7. Use ${sourceLocator} as locatorKind for the output summary. Report the output path, validation result, and every item still requiring human review.`,
       "",
       "## Task body",
       "```text",
@@ -372,9 +398,9 @@ async function markdownToPptx(markdown: string, title: string): Promise<Blob> {
   return new Blob([buffer as ArrayBuffer], { type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" });
 }
 
-export async function createGeneratedFile(markdown: string, name: string, format: ResponseFileFormat): Promise<{ name: string; blob: Blob }> {
+export async function createGeneratedFile(markdown: string, name: string, format: ResponseFileFormat, template?: File): Promise<{ name: string; blob: Blob }> {
   const fileName = safeGeneratedFileName(name, format);
   if (format === "md") return { name: fileName, blob: new Blob([markdown], { type: "text/markdown;charset=utf-8" }) };
-  if (format === "docx") return { name: fileName, blob: await markdownToDocx(markdown) };
-  return { name: fileName, blob: await markdownToPptx(markdown, name) };
+  const generated = format === "docx" ? await markdownToDocx(markdown) : await markdownToPptx(markdown, name);
+  return { name: fileName, blob: await applyFormatOnlyTemplate(generated, markdown, format, template) };
 }

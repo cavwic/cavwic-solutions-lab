@@ -37,12 +37,19 @@ def set_placeholder(slide, index, text, bullets=False):
     return True
 
 
+def remove_template_slides(presentation):
+    for slide_id in list(presentation.slides._sldIdLst):
+        presentation.part.drop_rel(slide_id.rId)
+        presentation.slides._sldIdLst.remove(slide_id)
+
+
 def render(template: Path, plan_path: Path, map_path: Path, output: Path) -> int:
     presentation = Presentation(template)
     plan = json.loads(plan_path.read_text(encoding="utf-8-sig"))
     layout_map = json.loads(map_path.read_text(encoding="utf-8-sig"))
     layouts = {layout.name: layout for layout in presentation.slide_layouts}
     warnings = []
+    remove_template_slides(presentation)
 
     title_config = layout_map.get("title", {})
     title_layout = layouts.get(title_config.get("layout"), presentation.slide_layouts[0])

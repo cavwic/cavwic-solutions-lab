@@ -26,7 +26,7 @@ Never convert an unknown into a commitment. Never write customer work, credentia
 4. Determine the current stage and the missing gate:
    - Presales: initial requirement, meeting pack, action list, discovery baseline, and POC decision.
    - Tender: source inventory, requirement extraction, baseline comparison, response evidence, technical volume, and review.
-   - Award: commitment baseline, handover pack, open actions, owner, and change control.
+   - Award: award supplements, final bid baseline, temporary changes, department responsibilities, handover tasks, responses, and acceptance.
 5. Call `$tender-requirement-extraction` when tender files or amendments have not been converted into a source-linked review matrix.
 6. Stop and request human review when extracted requirements are new, changed, conflicting, mandatory, scored, or disqualifying.
 7. Call `$technical-bid-package` only after the applicable tender requirements are reviewed and the evidence library is inventoried.
@@ -36,8 +36,14 @@ Never convert an unknown into a commitment. Never write customer work, credentia
 
 ## Deliverable rules
 
+- Treat every DOCX, XLSX, or PPTX template as a format-only asset. Reuse supported layout, style, theme, dimensions, headers, footers, and master elements, but exclude all template body text, cell values, examples, claims, commitments, and instructions from drafting evidence and generated content. Prefer a deliverable-specific template; use the matching general project template only when no specific template is selected.
+- Follow `workspacePath` and the numbered business folders in `references/workspace-contract.md`. Reuse an existing project file by SHA-256 and record the reference in `说明文档.txt`; do not copy the same file into multiple module folders.
 - Use `assets/project-brief.md` for a new discovery record.
 - Use `assets/handover-checklist.csv` for post-award technical handover.
+- Apply the award-stage precedence in this order: temporary change notes, award supplements and award notes, then final bid files. Record conflicts instead of silently merging them.
+- Define each participating department before splitting tasks. Store its responsibility boundary, owner, default deliverable type, and default response method. Assign tasks only to departments present in the project manifest.
+- Each handover task must have a department, scope, deliverable, owner, due date, dependency, acceptance criteria, and response method. Use file upload for documents, drawings, BOMs, and test records; use a controlled package or repository path for software; use a written report or status confirmation for work that does not produce a file; use mixed response when more than one form is required.
+- Do not mark a task submitted or accepted unless the response record matches its declared response method. Acceptance also requires explicit criteria.
 - Keep discovery and tender requirements as separate baselines. Record additions, changes, removals, and conflicts.
 - Define POC scope, sample, success criteria, failure scripts, fallback, owner, and sign-off before presenting it as ready.
 - Preserve formal tender wording in the source field. Put plain-language interpretation in the normalized field.

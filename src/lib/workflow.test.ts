@@ -1,8 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { compareBaselines, createRequirement, createSampleProject, inferProjectStage, localizeBuiltInProject, validateProject } from "./workflow";
-import { createEmptyProject, projectManifestSchema } from "./workspace-schema";
+import { createEmptyProject, createPresalesRound, isLegacyUntouchedPresalesRound, projectManifestSchema } from "./workspace-schema";
 
 describe("solution workflow rules", () => {
+  it("starts new projects without a communication round and identifies only the untouched legacy default", () => {
+    const project = createEmptyProject("zh");
+    expect(project.presalesRounds).toEqual([]);
+    const legacyRound = createPresalesRound("zh", 1);
+    expect(legacyRound.title).toBe("第一次沟通");
+    expect(createPresalesRound("zh", 2).title).toBe("第二次沟通");
+    expect(createPresalesRound("zh", 3).title).toBe("第三次沟通");
+    expect(createPresalesRound("zh", 10).title).toBe("第十次沟通");
+    expect(createPresalesRound("zh", 11).title).toBe("第十一次沟通");
+    expect(createPresalesRound("en", 3).title).toBe("Communication 3");
+    expect(isLegacyUntouchedPresalesRound(legacyRound)).toBe(true);
+    legacyRound.customerNeeds = "客户已提出需求";
+    expect(isLegacyUntouchedPresalesRound(legacyRound)).toBe(false);
+  });
+
   it("keeps discovery and tender baselines separate", () => {
     const project = createSampleProject();
     const diff = compareBaselines(project.requirements);
@@ -57,6 +72,10 @@ describe("solution workflow rules", () => {
     const staleCache = createEmptyProject("zh");
     staleCache.name = "New solution project";
     expect(localizeBuiltInProject(staleCache, "zh").name).toBe("新建解决方案项目");
+
+    const legacyRoundTitle = createEmptyProject("zh");
+    legacyRoundTitle.presalesRounds.push({ ...createPresalesRound("zh", 1), title: "第 1 次沟通" });
+    expect(localizeBuiltInProject(legacyRoundTitle, "zh").presalesRounds[0].title).toBe("第一次沟通");
   });
 
   it("derives the current project stage from the most advanced recorded work", () => {
@@ -73,17 +92,55 @@ describe("solution workflow rules", () => {
     expect(inferProjectStage(project)).toBe("delivery");
   });
 
+  it("derives delivery stage and audits the new handover task response", () => {
+    const project = createEmptyProject("zh");
+    project.handover.departments = [{
+      id: "department-delivery",
+      name: "交付部",
+      responsibility: "现场部署",
+      owner: "",
+      defaultDeliverableType: "site-action",
+      defaultResponseMethod: "confirmation",
+    }];
+    project.handover.tasks = [{
+      id: "handover-task-1",
+      title: "完成现场部署确认",
+      departmentId: "department-delivery",
+      scope: "按中标范围完成部署。",
+      deliverableType: "site-action",
+      responseMethod: "confirmation",
+      deliverableName: "现场部署确认单",
+      owner: "",
+      dueDate: "",
+      status: "accepted",
+      dependencyNotes: "",
+      acceptanceCriteria: "",
+      sourceIds: [],
+      responseText: "",
+      responsePath: "",
+      responseSourceIds: [],
+    }];
+    expect(inferProjectStage(project)).toBe("delivery");
+    const issues = validateProject(project).map((issue) => issue.message);
+    expect(issues.some((message) => message.includes("缺少验收标准"))).toBe(true);
+    expect(issues.some((message) => message.includes("没有对应响应记录"))).toBe(true);
+  });
+
   it("opens older project manifests with default presales workflow fields", () => {
     const legacy = createEmptyProject("zh") as Record<string, unknown>;
     delete legacy.enterpriseContext;
     delete legacy.presalesRounds;
+    delete legacy.handover;
     const parsed = projectManifestSchema.parse(legacy);
     expect(parsed.enterpriseContext.sourceIds).toEqual([]);
     expect(parsed.presalesRounds).toEqual([]);
+    expect(parsed.handover.departments).toEqual([]);
+    expect(parsed.handover.tasks).toEqual([]);
   });
 
   it("opens response actions created before action templates were added", () => {
     const legacy = createEmptyProject("zh");
+    legacy.presalesRounds.push(createPresalesRound("zh", 1));
     const action = {
       id: "legacy-response",
       title: "",

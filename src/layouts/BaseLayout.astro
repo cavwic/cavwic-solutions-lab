@@ -1,5 +1,5 @@
 ---
-import { Settings2 } from "@lucide/astro";
+import { Languages, Moon, Redo2, Settings2, Sun, Undo2 } from "@lucide/astro";
 import "../styles/global.css";
 const { title, titleZh = title, titleEn = title, current } = Astro.props;
 const base = import.meta.env.BASE_URL.replace(/\/$/, "");
@@ -15,22 +15,101 @@ const href = (path: string) => `${base}${path}`;
     <title>{title}</title>
     <script is:inline define:vars={{ titleZh, titleEn }}>
       const saved = localStorage.getItem("cavwic-lab-theme");
-      document.documentElement.dataset.theme = saved === "light" || saved === "dark" ? saved : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      const initialTheme = saved === "light" || saved === "dark" ? saved : (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+      document.documentElement.dataset.theme = initialTheme;
       const savedLocale = localStorage.getItem("cavwic-lab-locale");
       const initialLocale = savedLocale === "zh" || savedLocale === "en" ? savedLocale : (navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en");
+      let historyState = { canUndo: false, canRedo: false, busy: false };
+      const updateHistoryControls = () => {
+        const locale = document.documentElement.dataset.locale === "en" ? "en" : "zh";
+        const undoButton = document.getElementById("global-history-undo");
+        const redoButton = document.getElementById("global-history-redo");
+        if (undoButton) {
+          const label = locale === "zh" ? "撤销（最多三步）" : "Undo (up to three steps)";
+          undoButton.setAttribute("aria-label", label);
+          undoButton.setAttribute("title", label);
+          undoButton.disabled = historyState.busy || !historyState.canUndo;
+        }
+        if (redoButton) {
+          const label = locale === "zh" ? "恢复（最多三步）" : "Redo (up to three steps)";
+          redoButton.setAttribute("aria-label", label);
+          redoButton.setAttribute("title", label);
+          redoButton.disabled = historyState.busy || !historyState.canRedo;
+        }
+      };
+      const updateGlobalControls = () => {
+        const locale = document.documentElement.dataset.locale === "en" ? "en" : "zh";
+        const theme = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+        const themeButton = document.getElementById("global-theme-toggle");
+        const localeButton = document.getElementById("global-locale-toggle");
+        if (themeButton) {
+          const label = locale === "zh"
+            ? (theme === "light" ? "切换到深色模式" : "切换到浅色模式")
+            : (theme === "light" ? "Switch to dark mode" : "Switch to light mode");
+          themeButton.setAttribute("aria-label", label);
+          themeButton.setAttribute("title", label);
+        }
+        if (localeButton) {
+          const label = locale === "zh" ? "Switch to English" : "切换到中文";
+          localeButton.setAttribute("aria-label", label);
+          localeButton.setAttribute("title", label);
+        }
+        updateHistoryControls();
+      };
       const applyLocale = (locale) => {
         document.documentElement.dataset.locale = locale;
         document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
         document.title = locale === "zh" ? titleZh : titleEn;
+        updateGlobalControls();
       };
       applyLocale(initialLocale);
       window.addEventListener("cavwic-locale-change", (event) => applyLocale(event.detail));
+      window.addEventListener("cavwic-theme-change", (event) => {
+        document.documentElement.dataset.theme = event.detail;
+        updateGlobalControls();
+      });
+      window.addEventListener("cavwic-history-state", (event) => {
+        historyState = { ...historyState, ...event.detail };
+        updateHistoryControls();
+      });
+      window.addEventListener("DOMContentLoaded", () => {
+        document.getElementById("global-history-undo")?.addEventListener("click", () => {
+          window.dispatchEvent(new CustomEvent("cavwic-history-undo"));
+        });
+        document.getElementById("global-history-redo")?.addEventListener("click", () => {
+          window.dispatchEvent(new CustomEvent("cavwic-history-redo"));
+        });
+        document.getElementById("global-theme-toggle")?.addEventListener("click", () => {
+          const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+          localStorage.setItem("cavwic-lab-theme", next);
+          window.dispatchEvent(new CustomEvent("cavwic-theme-change", { detail: next }));
+        });
+        document.getElementById("global-locale-toggle")?.addEventListener("click", () => {
+          const next = document.documentElement.dataset.locale === "zh" ? "en" : "zh";
+          localStorage.setItem("cavwic-lab-locale", next);
+          window.dispatchEvent(new CustomEvent("cavwic-locale-change", { detail: next }));
+        });
+        updateGlobalControls();
+        window.dispatchEvent(new CustomEvent("cavwic-history-request"));
+      });
     </script>
   </head>
   <body>
     <header class="lab-header">
       <a class="lab-brand" href={href("/")}><span>C</span><strong>CAVWIC SOLUTIONS LAB</strong></a>
       <nav aria-label="全局设置 / Global settings">
+        <button id="global-history-undo" class="global-header-control global-history-control" type="button" aria-label="撤销（最多三步）" disabled>
+          <Undo2 size={18}/>
+        </button>
+        <button id="global-history-redo" class="global-header-control global-history-control" type="button" aria-label="恢复（最多三步）" disabled>
+          <Redo2 size={18}/>
+        </button>
+        <button id="global-theme-toggle" class="global-header-control global-theme-toggle" type="button" aria-label="切换到深色模式">
+          <Moon class="theme-icon theme-moon" size={18}/><Sun class="theme-icon theme-sun" size={18}/>
+        </button>
+        <button id="global-locale-toggle" class="global-header-control" type="button" aria-label="Switch to English">
+          <Languages size={18}/><span data-i18n="zh">EN</span><span data-i18n="en">中</span>
+        </button>
         <a class:list={{ active: current === "model" }} href={href("/model-settings")} aria-label="模型配置 / Model configuration"><Settings2 size={18}/><span data-i18n="zh">模型配置</span><span data-i18n="en">Model configuration</span></a>
       </nav>
     </header>

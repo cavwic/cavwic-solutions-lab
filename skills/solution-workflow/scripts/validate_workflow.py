@@ -40,6 +40,26 @@ def validate(project: dict) -> tuple[list[str], list[str]]:
     for action in project.get("actions", []):
         if action.get("status") != "done" and not action.get("owner", "").strip():
             warnings.append(f"open action has no owner: {action.get('title', action.get('id'))}")
+    handover = project.get("handover", {})
+    department_ids = {item.get("id") for item in handover.get("departments", [])}
+    for task in handover.get("tasks", []):
+        label = task.get("title") or task.get("id") or "unnamed handover task"
+        if task.get("departmentId") not in department_ids:
+            warnings.append(f"handover task has no valid department: {label}")
+        if task.get("status") != "accepted" and not task.get("owner", "").strip():
+            warnings.append(f"handover task has no owner: {label}")
+        if not task.get("acceptanceCriteria", "").strip():
+            message = f"handover task has no acceptance criteria: {label}"
+            (errors if task.get("status") == "accepted" else warnings).append(message)
+        if task.get("status") in {"submitted", "accepted"}:
+            method = task.get("responseMethod")
+            has_file = bool(task.get("responseSourceIds"))
+            has_report = bool(task.get("responseText", "").strip())
+            has_path = bool(task.get("responsePath", "").strip())
+            has_response = has_file if method == "file" else has_path if method == "path" else (has_file or has_report or has_path) if method == "mixed" else has_report
+            if not has_response:
+                message = f"handover task status has no matching response: {label}"
+                (errors if task.get("status") == "accepted" else warnings).append(message)
     return errors, warnings
 
 

@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $indexFile)) {
 }
 
 Set-Location -LiteralPath $projectRoot
-& $nodePath $serverScript --host 127.0.0.1 --port 4322
+& $nodePath $serverScript --host 127.0.0.1 --port 43202
 
 if ($LASTEXITCODE -ne 0) {
   throw "Static review server stopped unexpectedly."
