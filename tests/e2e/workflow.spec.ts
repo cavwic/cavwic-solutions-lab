@@ -208,6 +208,7 @@ test("localizes every visible date and time input without clipping native placeh
 
   await expect(deadline).toHaveAttribute("lang", "zh-CN");
   await expect(deadline.locator("xpath=..").locator("span")).toHaveText("年 / 月 / 日");
+  await expect(communicationTime.locator("xpath=..").locator("span")).toHaveText("年 / 月 / 日");
   await deadline.fill("2026-08-23");
   await communicationTime.fill("2026-08-23T09:30");
   await expect(deadline.locator("xpath=..").locator("span")).toHaveText("2026/08/23");

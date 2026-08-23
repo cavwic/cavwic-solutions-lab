@@ -455,16 +455,18 @@ function LocalizedTemporalInput({
   locale,
   value,
   ariaLabel,
+  emptyPlaceholder,
   onChange,
 }: {
   type: "date" | "datetime-local";
   locale: Locale;
   value: string;
   ariaLabel: string;
+  emptyPlaceholder?: string;
   onChange(value: string): void;
 }) {
   const datePlaceholder = locale === "zh" ? "年 / 月 / 日" : "MM / DD / YYYY";
-  const placeholder = type === "date" ? datePlaceholder : `${datePlaceholder}  HH:MM`;
+  const placeholder = emptyPlaceholder ?? (type === "date" ? datePlaceholder : `${datePlaceholder}  HH:MM`);
   const [datePart = "", timePart = ""] = value.split("T");
   const [year = "", month = "", day = ""] = datePart.split("-");
   const formattedDate = year && month && day
@@ -2972,7 +2974,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
             <div className="round-node">
               <span className="round-cell-label">{locale === "zh" ? "沟通节点" : "Communication"}</span>
               <input aria-label={locale === "zh" ? "沟通节点名称" : "Communication name"} value={round.title} onChange={(event) => updatePresalesRound(round.id, { title: event.target.value })}/>
-              <LocalizedTemporalInput type="datetime-local" locale={locale} ariaLabel={locale === "zh" ? "沟通时间" : "Communication time"} value={round.meetingAt} onChange={(value) => updatePresalesRound(round.id, { meetingAt: value })}/>
+              <LocalizedTemporalInput type="datetime-local" locale={locale} ariaLabel={locale === "zh" ? "沟通时间" : "Communication time"} emptyPlaceholder={locale === "zh" ? "年 / 月 / 日" : undefined} value={round.meetingAt} onChange={(value) => updatePresalesRound(round.id, { meetingAt: value })}/>
               <div className="participant-editor">
                 <strong>{locale === "zh" ? "参与沟通人员" : "Participants"}</strong>
                 <select aria-label={locale === "zh" ? "参会人员类别" : "Participant category"} value={participantDraft.category} onChange={(event) => setParticipantDrafts((current) => ({ ...current, [round.id]: { ...participantDraft, category: event.target.value as PresalesParticipant["category"] } }))}>{Object.entries(participantCategoryLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select>
