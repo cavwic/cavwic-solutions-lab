@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildCodexHandoverTask, buildHandoverTaskSplitPrompt, requestHandoverTaskSplit } from "./handover-generation";
 import { createEmptyProject, type SourceDocument } from "./workspace-schema";
+import { DEFAULT_MODEL_SETTINGS } from "./model-settings";
 
 const source = (id: string, name: string, text: string): SourceDocument => ({
   id,
@@ -59,12 +60,10 @@ describe("handover task generation", () => {
         sourceIds: ["award-1"],
       }],
     };
-    const fetcher = async () => new Response(JSON.stringify({ choices: [{ message: { content: `\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`` } }] }), { status: 200 });
+    const fetcher = async () => new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: `\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`` } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     const result = await requestHandoverTaskSplit({
-      schemaVersion: "2.0.0",
+      ...DEFAULT_MODEL_SETTINGS,
       provider: "cloud",
-      localEndpoint: "",
-      localModel: "",
       cloudEndpoint: "https://example.com/v1/chat/completions",
       cloudModel: "test-model",
     }, "secret", "prompt", fetcher as typeof fetch);

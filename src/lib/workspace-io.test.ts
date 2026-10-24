@@ -11,6 +11,7 @@ import {
   saveProjectToDirectory,
   saveWorkspaceFilesAsZip,
   synchronizeProjectHistoryToDirectory,
+  trashWorkspaceFileFromRelativePath,
   type DirectoryHandleLike,
   writeWorkspaceFileToRelativePath,
 } from "./workspace-io";
@@ -58,6 +59,34 @@ class MemoryDirectoryHandle implements DirectoryHandleLike {
 }
 
 describe("workspace directory management", () => {
+  it("moves a chosen workspace file to the Recycle Bin without using permanent removal", async () => {
+    const root = new MemoryDirectoryHandle("project-root");
+    const directory = await root.getDirectoryHandle("generated", { create: true });
+    await directory.getFileHandle("result.txt", { create: true });
+    await directory.getFileHandle("keep.txt", { create: true });
+    const recycled: string[] = [];
+    const expectedFingerprint = { size: 8, sha256: "a".repeat(64) };
+    Object.assign(directory, { trashEntry: async (name: string, expected: unknown) => { expect(expected).toEqual(expectedFingerprint); recycled.push(name); directory.children.delete(name); } });
+    directory.removeEntry = async () => { throw new Error("Permanent deletion must never run."); };
+    await trashWorkspaceFileFromRelativePath(root, "generated/result.txt", expectedFingerprint);
+    expect(recycled).toEqual(["result.txt"]);
+    expect([...directory.children.keys()]).toEqual(["keep.txt"]);
+  });
+
+  it("refuses unsafe cleanup paths and preserves files when recycling is unavailable or denied", async () => {
+    const root = new MemoryDirectoryHandle("project-root");
+    const directory = await root.getDirectoryHandle("generated", { create: true });
+    await directory.getFileHandle("result.txt", { create: true });
+    for (const relativePath of ["result.txt", "../result.txt", "generated/../result.txt", "generated//result.txt", "/generated/result.txt", "generated/a\\b.txt", "generated/a:stream"]) {
+      await expect(trashWorkspaceFileFromRelativePath(root, relativePath)).rejects.toThrow("Invalid workspace file path");
+    }
+    await expect(trashWorkspaceFileFromRelativePath(root, "generated/result.txt")).rejects.toThrow("Recycle Bin");
+    expect(directory.children.has("result.txt")).toBe(true);
+    Object.assign(directory, { trashEntry: async () => { throw new Error("Permission denied"); } });
+    await expect(trashWorkspaceFileFromRelativePath(root, "generated/result.txt")).rejects.toThrow("Permission denied");
+    expect(directory.children.has("result.txt")).toBe(true);
+  });
+
   it("creates the six managed project stage folders", async () => {
     const root = new MemoryDirectoryHandle("project-root");
     await ensureProjectStageDirectories(root);

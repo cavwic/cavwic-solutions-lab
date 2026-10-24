@@ -1,12 +1,65 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Page, type Route } from "@playwright/test";
 import { selectOutputDirectory, selectProjectDirectory } from "./helpers";
+
+const unexpectedModelRequests = new WeakMap<Page, string[]>();
+test.use({ serviceWorkers: "block" });
+
+async function openModelSettings(page: Page) {
+  const panel = page.getByTestId("model-controls");
+  if (!await panel.isVisible()) await page.getByRole("button", { name: "展开模型设置", exact: true }).click();
+  await expect(panel).toBeVisible();
+  return panel;
+}
+
+async function configureLocalModel(page: Page, endpoint: string, model: string, continueTask = false) {
+  const panel = await openModelSettings(page);
+  await page.getByTestId("model-mode-local").click();
+  await page.getByTestId("local-runtime").selectOption("openai");
+  await page.getByTestId("local-endpoint").fill(endpoint);
+  await page.getByTestId("local-model").fill(model);
+  await panel.getByRole("button", { name: continueTask ? "保存并继续" : "保存配置", exact: true }).click();
+  if (!continueTask) {
+    await expect(panel.locator(".model-settings-notice")).toHaveText("配置已保存。");
+    await page.getByRole("button", { name: "收起模型设置", exact: true }).click();
+  }
+  await expect(panel).toBeHidden();
+}
+
+function completedChat(content: string, model: string) {
+  return { model, choices: [{ finish_reason: "stop", message: { role: "assistant", content } }] };
+}
+
+async function mockChatEndpoint(page: Page, endpoint: string, handler: (route: Route) => Promise<void>) {
+  await page.route(endpoint, async route => {
+    if (route.request().method() === "OPTIONS") {
+      await route.fulfill({ status: 204, headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "content-type, authorization" } });
+      return;
+    }
+    expect(route.request().method()).toBe("POST");
+    await handler(route);
+  });
+}
 
 async function addCommunicationNode(page: Page, locale: "zh" | "en" = "zh") {
   await page.getByRole("button", { name: locale === "zh" ? "新增沟通节点" : "Add communication node", exact: true }).click();
   return page.locator(".presales-round").last();
 }
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, baseURL }) => {
+  if (!baseURL) throw new Error("This suite requires the project's local baseURL.");
+  const appOrigin = new URL(baseURL).origin;
+  const unexpected: string[] = [];
+  unexpectedModelRequests.set(page, unexpected);
+  // Specific model mocks registered later take precedence over this fail-closed guard.
+  await page.route("**/*", async route => {
+    const url = new URL(route.request().url());
+    if (["http:", "https:"].includes(url.protocol) && url.origin !== appOrigin) {
+      unexpected.push(url.origin + url.pathname);
+      await route.abort("blockedbyclient");
+      return;
+    }
+    await route.continue();
+  });
   await page.goto("/");
   await page.evaluate(() => {
     localStorage.clear();
@@ -15,6 +68,10 @@ test.beforeEach(async ({ page }) => {
   });
   await page.reload();
   await expect(page.locator(".solution-app")).toHaveAttribute("data-ready", "true");
+});
+
+test.afterEach(async ({ page }) => {
+  expect(unexpectedModelRequests.get(page) || [], "All non-app requests must have explicit mocks").toEqual([]);
 });
 
 test("starts new projects without creating a communication round", async ({ page }) => {
@@ -50,7 +107,7 @@ test("requires a project folder before imports and model-generated files", async
   await action.getByRole("button", { name: "生成文件" }).click();
   dialog = page.getByRole("alertdialog");
   await expect(dialog.getByRole("heading")).toHaveText("未设置项目路径，请先在“项目设置”中选择项目路径。");
-  await expect(dialog.getByRole("button", { name: "是，前往配置" })).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "展开模型设置" })).toHaveCount(0);
   await dialog.getByRole("button", { name: "知道了" }).click();
 
   await page.getByRole("button", { name: "招标", exact: true }).click();
@@ -115,6 +172,7 @@ test("undoes and redoes a deleted source file in both the page and project folde
 });
 
 test("runs the public presales-to-bid project flow and persists edits", async ({ page }) => {
+  await selectProjectDirectory(page, "端到端解决方案项目");
   const projectName = page.locator(".field-grid input").first();
   await expect(projectName).toHaveValue("新建解决方案项目");
   await projectName.fill("端到端解决方案项目");
@@ -187,18 +245,30 @@ test("exports selected project files with their relative folder hierarchy", asyn
   })).toBe(true);
 });
 
-test("uses the system language until the user chooses another language", async ({ page }) => {
+test("uses the Chinese default and persists explicit language choices and platform titles", async ({ page }) => {
   await page.evaluate(() => localStorage.removeItem("cavwic-lab-locale"));
   await page.reload();
+  await expect(page.locator(".solution-app")).toHaveAttribute("data-ready", "true");
+  await expect(page.locator("html")).toHaveAttribute("data-locale", "zh");
+  await expect(page).toHaveTitle("售前解决方案平台");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("售前解决方案平台");
+  await expect(page.getByLabel("项目名称", { exact: true })).toHaveValue("新建解决方案项目");
+  await page.getByRole("button", { name: "Switch to English" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-locale", "en");
-  await expect(page).toHaveTitle("CAVWIC Solution Project Workbench");
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Solution Project Workbench");
-  await expect(page.locator(".project-header > div > span")).toHaveText("New solution project");
+  await expect(page).toHaveTitle("Presales Solution Platform");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Presales Solution Platform");
+  await expect(page.getByLabel("Project name", { exact: true })).toHaveValue("New solution project");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-locale", "en");
+  await expect(page).toHaveTitle("Presales Solution Platform");
   await page.getByRole("button", { name: "切换到中文" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-locale", "zh");
-  await expect(page).toHaveTitle("CAVWIC 解决方案项目工作台");
-  await expect(page.getByRole("heading", { level: 1 })).toHaveText("解决方案项目工作台");
-  await expect(page.locator(".project-header > div > span")).toHaveText("新建解决方案项目");
+  await expect(page).toHaveTitle("售前解决方案平台");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("售前解决方案平台");
+  await expect(page.getByLabel("项目名称", { exact: true })).toHaveValue("新建解决方案项目");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-locale", "zh");
+  await expect(page).toHaveTitle("售前解决方案平台");
 });
 
 test("localizes every visible date and time input without clipping native placeholder text", async ({ page }) => {
@@ -260,6 +330,7 @@ test("confirms, unlocks, clears, and persists editable multiline fields", async 
 });
 
 test("updates the current stage only when work is recorded", async ({ page }) => {
+  await selectProjectDirectory(page, "阶段记录项目");
   const stage = page.locator(".rail-status");
   await expect(stage).toHaveAttribute("data-stage", "presales");
   await expect(stage.locator("strong")).toHaveText("售前");
@@ -274,6 +345,7 @@ test("updates the current stage only when work is recorded", async ({ page }) =>
 });
 
 test("preprocesses selected tender files and keeps unrecognized files without OCR", async ({ page }) => {
+  await selectProjectDirectory(page, "招标预处理项目");
   await page.getByRole("button", { name: "招标" }).click();
   await page.locator('#tender-files input[type="file"]').setInputFiles([
     { name: "招标书.txt", mimeType: "text/plain", buffer: Buffer.from("投标人应提交技术方案、部署方案、验收方案和完整的项目进度计划。") },
@@ -304,32 +376,32 @@ test("restores every tender file after model configuration and completes OCR", a
   ]);
   await page.locator("#tender-files .tender-file-toolbar").getByRole("button", { name: "预处理" }).click();
   await page.getByRole("alertdialog").getByRole("button", { name: "是" }).click();
+  const workbenchUrl = page.url();
   const modelChoice = page.getByRole("alertdialog");
-  await expect(modelChoice.getByRole("heading")).toHaveText("模型未配置，请前往配置。");
-  await modelChoice.getByRole("button", { name: "是，前往配置" }).click();
-  await expect(page).toHaveURL(/\/model-settings\?return=/);
-
-  await page.route("http://127.0.0.1:9020/v1/chat/completions", async (route) => {
-    const body = route.request().postDataJSON() as { messages: Array<{ content: unknown }> };
+  await expect(modelChoice.getByRole("heading")).toHaveText("请先完善当前任务的模型设置。");
+  let ocrCalls = 0;
+  await mockChatEndpoint(page, "http://127.0.0.1:9020/v1/chat/completions", async route => {
+    const body = route.request().postDataJSON() as { model: string; messages: Array<{ content: unknown }> };
+    expect(body.model).toBe("vision-test-model");
     expect(JSON.stringify(body.messages[1].content)).toContain("data:image/png;base64");
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "补遗要求：交付周期调整为 60 天。" } }] }) });
+    ocrCalls += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify(completedChat("补遗要求：交付周期调整为 60 天。", body.model)) });
   });
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9020/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("vision-test-model");
-  page.once("dialog", async (dialog) => {
+  await modelChoice.getByRole("button", { name: "展开模型设置", exact: true }).click();
+  await expect(page).toHaveURL(workbenchUrl);
+  page.once("dialog", async dialog => {
     expect(dialog.message()).toBe("识别完成");
     await dialog.accept();
   });
-  await page.getByRole("button", { name: "保存配置" }).click();
+  await configureLocalModel(page, "http://127.0.0.1:9020/v1/chat/completions", "vision-test-model", true);
+  await expect.poll(() => ocrCalls).toBe(1);
   await expect(page.getByText("可读招标书.txt", { exact: true })).toBeVisible();
   await expect(page.getByText("扫描补遗.png", { exact: true })).toBeVisible();
-  await expect(page.getByRole("alertdialog").getByRole("heading")).toHaveText("未设置项目路径，请先在“项目设置”中选择项目路径。");
-  await page.getByRole("alertdialog").getByRole("button", { name: "知道了" }).click();
-  await selectProjectDirectory(page, "招标 OCR 项目");
-  await page.locator("#tender-files .tender-file-toolbar").getByRole("button", { name: "预处理" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "是" }).click();
+  await expect(page.getByLabel("选择文件 可读招标书.txt")).toBeChecked();
+  await expect(page.getByLabel("选择文件 扫描补遗.png")).toBeChecked();
   await expect(page.getByRole("button", { name: /扫描补遗\.png 上传并预处理完成/ })).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as typeof window & { __workspaceRoot?: { name: string } }).__workspaceRoot?.name)).toBe("招标 OCR 项目");
   const persistedTenderNames = await page.evaluate(() => {
     const stored = JSON.parse(localStorage.getItem("cavwic-solution-workspace") || "{}") as { tenderSourceIds?: string[]; sources?: Array<{ id: string; name: string }> };
     return (stored.tenderSourceIds || []).map((id) => stored.sources?.find((source) => source.id === id)?.name || id);
@@ -344,16 +416,11 @@ test("restores every tender file after model configuration and completes OCR", a
 });
 
 test("analyzes tender files, compares the full presales set, and builds the bid checklist", async ({ page }) => {
+  await selectProjectDirectory(page, "招标分析项目");
   const presalesRound = await addCommunicationNode(page);
   await presalesRound.locator("label.file-command", { hasText: "导入客户附件" }).locator("input[type=file]").setInputFiles({ name: "售前需求A.txt", mimeType: "text/plain", buffer: Buffer.from("售前阶段约定交付周期为 90 天，并要求提交部署方案。") });
 
-  await page.getByRole("link", { name: /模型配置/ }).click();
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9021/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("tender-analysis-model");
-  await page.getByRole("button", { name: "保存配置" }).click();
-  await page.getByRole("link", { name: "返回工作台" }).click();
-  await selectProjectDirectory(page, "招标分析项目");
+  await configureLocalModel(page, "http://127.0.0.1:9021/v1/chat/completions", "tender-analysis-model");
   await page.getByRole("button", { name: "招标" }).click();
 
   await page.locator('#tender-files input[type="file"]').setInputFiles({ name: "正式招标书.txt", mimeType: "text/plain", buffer: Buffer.from("投标截止时间为 2026 年 9 月 30 日，交付周期为 75 天，须提交技术方案和验收方案。") });
@@ -367,7 +434,7 @@ test("analyzes tender files, compares the full presales set, and builds the bid 
   await page.getByLabel("招标分析要求").fill("提取时间、参数、版本关系和投标文件清单，并标注来源。");
   await page.getByLabel("招标分析文件格式").selectOption("md");
 
-  await page.route("http://127.0.0.1:9021/v1/chat/completions", async (route) => {
+  await mockChatEndpoint(page, "http://127.0.0.1:9021/v1/chat/completions", async (route) => {
     const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
     const prompt = request.messages[1].content;
     if (prompt.includes("技术投标文件编制负责人")) {
@@ -377,17 +444,17 @@ test("analyzes tender files, compares the full presales set, and builds the bid 
       expect(prompt).toContain("模板仅用于复用版式与视觉样式");
       expect(prompt).toContain("重点说明权限边界、实施步骤和验收方法");
       expect(prompt).toContain("交付周期 60 天");
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 技术方案\n\n## 项目理解\n\n交付周期为 60 天。\n\n## 待确认事项\n\n具体产品参数待确认。" } }] }) });
+      await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "# 技术方案\n\n## 项目理解\n\n交付周期为 60 天。\n\n## 待确认事项\n\n具体产品参数待确认。" } }] }) });
     } else if (prompt.includes("售前与正式招标基线对比")) {
       expect(prompt).toContain("售前需求A.txt");
       expect(prompt).toContain("正式招标书.txt");
       expect(prompt).toContain("澄清回复.txt");
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: `# 售前与招标差异\n\n交付周期发生变化。\n\n\`\`\`json\n${JSON.stringify({ schema: "cavwic-tender-analysis-1", requirements: [], bidFileChecklist: [], differences: [{ title: "交付周期", presales: "90 天", tender: "60 天", relation: "changed", notes: "以澄清回复为准" }] })}\n\`\`\`` } }] }) });
+      await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: `# 售前与招标差异\n\n交付周期发生变化。\n\n\`\`\`json\n${JSON.stringify({ schema: "cavwic-tender-analysis-1", requirements: [], bidFileChecklist: [], differences: [{ title: "交付周期", presales: "90 天", tender: "60 天", relation: "changed", notes: "以澄清回复为准" }] })}\n\`\`\`` } }] }) });
     } else {
       expect(prompt).toContain("正式招标书.txt");
       expect(prompt).toContain("澄清回复.txt");
       expect(prompt).not.toContain("售前需求A.txt");
-      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: `# 招标要求分析\n\n- 交付周期：60 天。\n\n\`\`\`json\n${JSON.stringify({ schema: "cavwic-tender-analysis-1", requirements: [{ title: "交付周期", category: "schedule", originalText: "交付周期最终调整为 60 天", normalizedText: "交付周期 60 天", sourceName: "澄清回复.txt", locator: "第 1 行", mandatory: true, scored: false, dueDate: "" }], bidFileChecklist: [{ title: "技术方案", category: "technical", notes: "正式招标书" }, { title: "验收方案", category: "delivery", notes: "正式招标书" }], differences: [] })}\n\`\`\`` } }] }) });
+      await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: `# 招标要求分析\n\n- 交付周期：60 天。\n\n\`\`\`json\n${JSON.stringify({ schema: "cavwic-tender-analysis-1", requirements: [{ title: "交付周期", category: "schedule", originalText: "交付周期最终调整为 60 天", normalizedText: "交付周期 60 天", sourceName: "澄清回复.txt", locator: "第 1 行", mandatory: true, scored: false, dueDate: "" }], bidFileChecklist: [{ title: "技术方案", category: "technical", notes: "正式招标书" }, { title: "验收方案", category: "delivery", notes: "正式招标书" }], differences: [] })}\n\`\`\`` } }] }) });
     }
   });
 
@@ -447,8 +514,8 @@ test("analyzes tender files, compares the full presales set, and builds the bid 
   await acceptanceFile.getByLabel("输出格式 验收方案").selectOption("docx");
   await acceptanceFile.getByLabel("细节要求 验收方案").fill("覆盖工厂验收、现场验收和遗留项关闭。");
   await acceptanceFile.getByRole("button", { name: "生成文件" }).click();
-  await expect(page.getByRole("alertdialog").getByRole("button")).toHaveText(["是，前往配置", "否，输出任务"]);
-  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
+  await expect(page.getByRole("alertdialog").getByRole("button")).toHaveText(["展开模型设置", "输出任务"]);
+  await page.getByRole("alertdialog").getByRole("button", { name: "输出任务" }).click();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __bidTaskWrites?: Array<{ name: string; content: string }> }).__bidTaskWrites || [])).toHaveLength(1);
   const [task] = await page.evaluate(() => (window as typeof window & { __bidTaskWrites?: Array<{ name: string; content: string }> }).__bidTaskWrites || []);
   expect(task.name).toMatch(/^bid-output-.+\.md$/);
@@ -486,12 +553,7 @@ test("manages presales communication rounds and generates a referenced file", as
   await expect(page.getByRole("button", { name: "导入企业信息" })).toHaveCount(0);
   await expect(page.getByText("POC 与定制演示")).toHaveCount(0);
 
-  await page.getByRole("link", { name: /模型配置/ }).click();
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9000/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("test-compatible-model");
-  await page.getByRole("button", { name: "保存配置" }).click();
-  await page.getByRole("link", { name: "返回工作台" }).click();
+  await configureLocalModel(page, "http://127.0.0.1:9000/v1/chat/completions", "test-compatible-model");
   await selectProjectDirectory(page, "售前响应项目");
 
   const firstRound = await addCommunicationNode(page);
@@ -525,7 +587,7 @@ test("manages presales communication rounds and generates a referenced file", as
   await expect(firstAction.getByLabel("响应文件格式")).toHaveValue("");
   await firstAction.getByLabel("响应文件格式").selectOption("md");
 
-  await page.route("http://127.0.0.1:9000/v1/chat/completions", async (route) => {
+  await mockChatEndpoint(page, "http://127.0.0.1:9000/v1/chat/completions", async (route) => {
     const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
     expect(request.messages[1].content).toContain("客户本轮需要响应需求 A");
     expect(request.messages[1].content).toContain("product-introduction.txt");
@@ -534,7 +596,7 @@ test("manages presales communication rounds and generates a referenced file", as
     expect(request.messages[1].content).not.toContain("现状、方案、边界");
     expect(request.messages[1].content).toContain("模板仅用于复用版式与视觉样式");
     expect(request.messages[1].content).not.toContain("不应进入模型提示词");
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 第一轮响应\n\n## 客户需求\n需求 A\n\n## 待确认项\n接口范围待确认。" } }] }) });
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "# 第一轮响应\n\n## 客户需求\n需求 A\n\n## 待确认项\n接口范围待确认。" } }] }) });
   });
   page.once("dialog", async (dialog) => {
     expect(dialog.message()).toBe("是否使用模型生成该文件？");
@@ -574,23 +636,37 @@ test("manages presales communication rounds and generates a referenced file", as
   await expect(page.locator(".presales-round")).toHaveCount(1);
 });
 
-test("uses one global model link and shows all five workflow stages", async ({ page }) => {
-  const navigation = page.locator(".lab-header nav");
-  await expect(navigation.locator("a")).toHaveCount(1);
-  await expect(navigation.getByRole("link", { name: /模型配置/ })).toHaveAttribute("href", /\/model-settings$/);
+test("uses one inline model entry and shows all five workflow stages", async ({ page }) => {
+  const workbenchUrl = page.url();
+  await expect(page.locator("#workbench-header-settings .model-provider-strip")).toHaveCount(1);
+  await expect(page.getByRole("radiogroup", { name: "模型通道" }).getByRole("radio")).toHaveCount(4);
   await expect(page.locator(".stage-rail > button")).toHaveCount(5);
-
-  await navigation.getByRole("link", { name: /模型配置/ }).click();
-  await expect(page).toHaveURL(/\/model-settings$/);
-  await expect(page.locator(".lab-header nav a.active")).toHaveAccessibleName(/模型配置/);
-  await expect(page.getByText("Codex 工作流", { exact: true }).first()).toBeVisible();
-  await expect(page.getByLabel("API Key（仅当前浏览器会话）")).toHaveCount(0);
+  await expect(page.getByTestId("model-controls")).toBeHidden();
+  const panel = await openModelSettings(page);
+  await expect(page).toHaveURL(workbenchUrl);
+  await expect(panel.getByRole("heading", { name: "模型与任务分工" })).toBeVisible();
+  await expect(panel.getByTestId("subscription-connection")).toHaveValue("codex");
+  await expect(panel.getByLabel("API 密钥", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "收起模型设置", exact: true }).click();
+  await expect(panel).toBeHidden();
 });
 
-test("keeps only the final project actions in the workspace toolbar", async ({ page }) => {
+test("redirects legacy model settings bookmarks to the inline workbench", async ({ page }) => {
+  const workbench = new URL(page.url());
+  const legacy = new URL("model-settings", workbench);
+  legacy.searchParams.set("return", workbench.pathname + "#tender-files");
+  await page.goto(legacy.href);
+  await expect(page).toHaveURL(url => url.origin === workbench.origin && url.pathname === workbench.pathname && url.searchParams.get("model-settings") === "open" && url.hash === "#tender-files");
+  await expect(page.getByTestId("model-controls")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "模型与任务分工" })).toBeVisible();
+  await expect(page).toHaveTitle("售前解决方案平台");
+});
+
+test("keeps project actions and file cleanup in the workspace toolbar", async ({ page }) => {
   const toolbar = page.locator(".workspace-toolbar");
   await expect(toolbar.getByRole("button", { name: "新建项目" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: "项目设置" })).toBeVisible();
+  await expect(toolbar.getByRole("button", { name: "文件清理" })).toBeVisible();
   await expect(toolbar.getByRole("button", { name: /示例/ })).toHaveCount(0);
   await expect(page.getByText("本地工作区路径提示")).toHaveCount(0);
 });
@@ -603,21 +679,34 @@ test("returns from model configuration to the pending customer analysis", async 
   await round.getByLabel("分析结果文件格式").selectOption("md");
   await round.getByRole("button", { name: "需求分析" }).click();
   const modelChoice = page.getByRole("alertdialog");
-  await expect(modelChoice.getByRole("heading")).toHaveText("未配置大模型，请前往配置。");
-  await expect(modelChoice.getByRole("button")).toHaveText(["是，前往配置", "否，输出任务"]);
-  await modelChoice.getByRole("button", { name: "是，前往配置" }).click();
-  await expect(page).toHaveURL(/\/model-settings\?return=/);
-
-  await page.getByRole("button", { name: "保存配置" }).click();
-  await expect(page).toHaveURL(/\/model-settings\?return=/);
-  await expect(page.getByText(/当前执行方式不能由网页直接调用/)).toBeVisible();
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9010/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("analysis-model");
-  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(modelChoice.getByRole("heading")).toHaveText("请先完善当前任务的模型设置。");
+  await expect(modelChoice.getByRole("button")).toHaveText(["展开模型设置", "输出任务"]);
+  let analysisCalls = 0;
+  await mockChatEndpoint(page, "http://127.0.0.1:9010/v1/chat/completions", async route => {
+    const body = route.request().postDataJSON() as { model: string; messages: Array<{ content: string }> };
+    expect(body.model).toBe("analysis-model");
+    expect(body.messages[1].content).toContain("客户资料.txt");
+    expect(body.messages[1].content).toContain("项目工期为 90 天");
+    analysisCalls += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify(completedChat("# 客户需求\n\n项目工期为 90 天。", body.model)) });
+  });
+  await modelChoice.getByRole("button", { name: "展开模型设置", exact: true }).click();
+  const panel = page.getByTestId("model-controls");
+  await expect(panel).toBeVisible();
   await expect(page).toHaveURL(workbenchUrl);
-  await expect(page.getByText("客户资料.txt")).toBeVisible();
-  await expect(page.getByLabel("分析结果文件格式")).toHaveValue("md");
+  // An invalid native-Codex save must keep the task pending and make no request.
+  await panel.getByRole("button", { name: "保存并继续", exact: true }).click();
+  await expect(panel.locator(".model-settings-notice")).toHaveAttribute("role", "alert");
+  await expect(panel.locator(".model-settings-notice")).toContainText("本机 Codex 登录仅限桌面版");
+  await expect(panel).toBeVisible();
+  expect(analysisCalls).toBe(0);
+  await configureLocalModel(page, "http://127.0.0.1:9010/v1/chat/completions", "analysis-model", true);
+  await expect.poll(() => analysisCalls).toBe(1);
+  await expect(page).toHaveURL(workbenchUrl);
+  await expect(round.getByText("客户资料.txt", { exact: true })).toBeVisible();
+  await expect(round.getByLabel("分析结果文件格式")).toHaveValue("md");
+  await expect(round.getByText("第一次沟通需求分析", { exact: true })).toBeVisible();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });
 
 test("outputs a customer analysis task when the user declines model configuration", async ({ page }) => {
@@ -647,7 +736,7 @@ test("outputs a customer analysis task when the user declines model configuratio
   await round.getByLabel("分析要求").fill("输出参数、来源位置和待确认项。");
   await round.getByLabel("分析结果文件格式").selectOption("docx");
   await round.getByRole("button", { name: "需求分析" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "输出任务" }).click();
 
   await expect(page).toHaveURL(workbenchUrl);
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __analysisTaskWrites?: Array<{ name: string; content: string }> }).__analysisTaskWrites || [])).toHaveLength(1);
@@ -659,12 +748,7 @@ test("outputs a customer analysis task when the user declines model configuratio
 });
 
 test("analyzes selected customer attachments with keywords and a matching template", async ({ page }) => {
-  await page.getByRole("link", { name: /模型配置/ }).click();
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9011/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("customer-analysis-model");
-  await page.getByRole("button", { name: "保存配置" }).click();
-  await page.getByRole("link", { name: "返回工作台" }).click();
+  await configureLocalModel(page, "http://127.0.0.1:9011/v1/chat/completions", "customer-analysis-model");
 
   await page.evaluate(() => {
     const writes: string[] = [];
@@ -721,7 +805,7 @@ test("analyzes selected customer attachments with keywords and a matching templa
   await expect(round.getByLabel("分析结果文件格式")).toHaveValue("");
   await round.getByLabel("分析结果文件格式").selectOption("md");
 
-  await page.route("http://127.0.0.1:9011/v1/chat/completions", async (route) => {
+  await mockChatEndpoint(page, "http://127.0.0.1:9011/v1/chat/completions", async (route) => {
     const request = route.request().postDataJSON() as { messages: Array<{ content: string }> };
     const prompt = request.messages[1].content;
     expect(prompt).toContain("额定负载 5 kg");
@@ -731,7 +815,7 @@ test("analyzes selected customer attachments with keywords and a matching templa
     expect(prompt).toContain("只列出技术参数、来源位置和待确认项");
     expect(prompt).not.toContain("# 待确认项");
     expect(prompt).toContain("模板仅用于复用版式与视觉样式");
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: "# 技术参数\n\n- 额定负载：5 kg（客户技术要求.txt，行 1）\n\n# 待确认项\n\n- 交付时间" } }] }) });
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "# 技术参数\n\n- 额定负载：5 kg（客户技术要求.txt，行 1）\n\n# 待确认项\n\n- 交付时间" } }] }) });
   });
   await round.getByRole("button", { name: "需求分析" }).click();
   await expect(round.getByText("第一次沟通需求分析", { exact: true })).toBeVisible();
@@ -764,20 +848,30 @@ test("requires a callable model before generating a response file", async ({ pag
   await action.locator('input[type="checkbox"]').check();
   await action.getByRole("button", { name: "生成文件" }).click();
   const modelChoice = page.getByRole("alertdialog");
-  await expect(modelChoice.getByRole("heading")).toHaveText("未配置大模型，请前往配置。");
-  await modelChoice.getByRole("button", { name: "是，前往配置" }).click();
-  await expect(page).toHaveURL(/\/model-settings\?return=/);
-
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9012/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("response-model");
-  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(modelChoice.getByRole("heading")).toHaveText("请先完善当前任务的模型设置。");
+  let responseCalls = 0;
+  await mockChatEndpoint(page, "http://127.0.0.1:9012/v1/chat/completions", async route => {
+    const body = route.request().postDataJSON() as { model: string; messages: Array<{ content: string }> };
+    expect(body.model).toBe("response-model");
+    expect(body.messages[1].content).toContain("待生成响应");
+    responseCalls += 1;
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify(completedChat("# 待生成响应\n\n仅根据输入生成，缺失事项待确认。", body.model)) });
+  });
+  expect(responseCalls).toBe(0);
+  await modelChoice.getByRole("button", { name: "展开模型设置", exact: true }).click();
   await expect(page).toHaveURL(workbenchUrl);
-
+  page.once("dialog", async dialog => {
+    expect(dialog.message()).toBe("是否使用模型生成该文件？");
+    await dialog.accept();
+  });
+  await configureLocalModel(page, "http://127.0.0.1:9012/v1/chat/completions", "response-model", true);
+  await expect.poll(() => responseCalls).toBe(1);
+  await expect(page).toHaveURL(workbenchUrl);
   action = page.locator(".round-action-row").first();
   await expect(action.getByLabel("响应文件名称")).toHaveValue("待生成响应");
   await expect(action.getByLabel("响应文件格式")).toHaveValue("docx");
   await expect(action.locator('input[type="checkbox"]')).toBeChecked();
+  await expect(page.locator(".presales-round").getByRole("button", { name: /待生成响应\.docx/ })).toBeVisible();
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem("cavwic-lab-model-action-return"))).toBeNull();
 });
 
@@ -816,27 +910,23 @@ test("batch-generates separate tasks and files only for checked response items",
   await expect(round.getByRole("button", { name: "生成任务", exact: true })).toHaveCount(0);
   await expect(round.getByRole("button", { name: "批量生成任务" })).toHaveCount(0);
   await round.getByRole("button", { name: "批量生成文件" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "输出任务" }).click();
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __taskWrites?: string[] }).__taskWrites || [])).toHaveLength(2);
   const taskNames = await page.evaluate(() => (window as typeof window & { __taskWrites?: string[] }).__taskWrites || []);
   expect(taskNames.some((name) => name.includes("响应文件一"))).toBe(true);
   expect(taskNames.some((name) => name.includes("响应文件三"))).toBe(true);
   expect(taskNames.some((name) => name.includes("响应文件二"))).toBe(false);
 
-  await page.getByRole("link", { name: /模型配置/ }).click();
-  await page.getByRole("button", { name: "本机或内网接口" }).click();
-  await page.getByLabel("Chat Completions 接口地址").fill("http://127.0.0.1:9001/v1/chat/completions");
-  await page.getByLabel("模型名称").fill("batch-test-model");
-  await page.getByRole("button", { name: "保存配置" }).click();
-  await page.getByRole("link", { name: "返回工作台" }).click();
-  await selectProjectDirectory(page, "批量响应项目");
+  await configureLocalModel(page, "http://127.0.0.1:9001/v1/chat/completions", "batch-test-model");
+  await expect(round.getByLabel("选择响应文件 响应文件一")).toBeChecked();
+  await expect(round.getByLabel("选择响应文件 响应文件三")).toBeChecked();
   await round.getByLabel("选择响应文件 响应文件一").check();
   await round.getByLabel("选择响应文件 响应文件三").check();
 
   let requestCount = 0;
-  await page.route("http://127.0.0.1:9001/v1/chat/completions", async (route) => {
+  await mockChatEndpoint(page, "http://127.0.0.1:9001/v1/chat/completions", async (route) => {
     requestCount += 1;
-    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ choices: [{ message: { content: `# 批量响应 ${requestCount}` } }] }) });
+    await route.fulfill({ status: 200, contentType: "application/json", headers: { "Access-Control-Allow-Origin": "*" }, body: JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: `# 批量响应 ${requestCount}` } }] }) });
   });
   let confirmations = 0;
   page.once("dialog", async (dialog) => {
@@ -893,7 +983,7 @@ test("stores sources, Codex tasks, and generated files in the selected project f
   await taskAction.getByLabel("响应文件名称").fill("项目响应任务");
   await taskAction.getByLabel("响应文件格式").selectOption("md");
   await taskAction.getByRole("button", { name: "生成文件" }).click();
-  await page.getByRole("alertdialog").getByRole("button", { name: "否，输出任务" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "输出任务" }).click();
   await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
     .some((path) => /客户项目\/presales-.+\.md$/.test(path))))
     .toBe(true);
@@ -903,5 +993,4 @@ test("stores sources, Codex tasks, and generated files in the selected project f
   await expect.poll(() => page.evaluate(() => ((window as typeof window & { __workspaceWrites?: string[] }).__workspaceWrites || [])
     .some((path) => /客户项目\/2_招标要求\/1_招标文件\/导入文件\/tender\.txt$/.test(path))))
     .toBe(true);
-
 });

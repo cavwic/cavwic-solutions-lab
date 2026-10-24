@@ -1,4 +1,5 @@
 import { projectToCsv, projectToMarkdown, presentationMarkdown } from "./exporters";
+import { pickDesktopDirectory, persistDesktopDirectory, restoreDesktopDirectory } from "./desktop-bridge";
 import { projectManifestSchema, SCHEMA_VERSION, workspaceManifestSchema, type ProjectManifest } from "./workspace-schema";
 import {
   WORKSPACE_MODULE_DIRECTORIES,
@@ -20,6 +21,7 @@ type FileHandleLike = {
   createWritable(): Promise<WritableLike>;
 };
 type FileSystemEntryLike = FileHandleLike | DirectoryHandleLike;
+export type WorkspaceFileFingerprint = { size: number; sha256: string };
 export type DirectoryHandleLike = {
   kind?: "directory";
   name: string;
@@ -28,6 +30,7 @@ export type DirectoryHandleLike = {
   entries?(): AsyncIterableIterator<[string, FileSystemEntryLike]>;
   isSameEntry?(other: DirectoryHandleLike): Promise<boolean>;
   removeEntry?(name: string, options?: { recursive?: boolean }): Promise<void>;
+  trashEntry?(name: string, expectedFingerprint?: WorkspaceFileFingerprint): Promise<void>;
   queryPermission?(descriptor?: { mode?: "read" | "readwrite" }): Promise<PermissionState>;
   requestPermission?(descriptor?: { mode?: "read" | "readwrite" }): Promise<PermissionState>;
 };
@@ -142,6 +145,7 @@ export async function clearPersistedSourceFiles(projectId: string): Promise<void
 }
 
 async function persistDirectoryHandle(key: string, handle: DirectoryHandleLike): Promise<void> {
+  if (typeof window !== "undefined" && window.bidDesktop) return persistDesktopDirectory(key, handle);
   if (typeof indexedDB === "undefined") return;
   try {
     const database = await openHandleDatabase();
@@ -158,6 +162,7 @@ async function persistDirectoryHandle(key: string, handle: DirectoryHandleLike):
 }
 
 async function restoreDirectoryHandle(key: string): Promise<DirectoryHandleLike | null> {
+  if (typeof window !== "undefined" && window.bidDesktop) return restoreDesktopDirectory(key);
   if (typeof indexedDB === "undefined") return null;
   const database = await openHandleDatabase();
   const handle = await new Promise<DirectoryHandleLike | undefined>((resolve, reject) => {
@@ -186,18 +191,19 @@ async function readJson(directory: DirectoryHandleLike, name: string): Promise<u
 }
 
 export function supportsDirectoryAccess(): boolean {
-  return typeof window !== "undefined" && typeof window.showDirectoryPicker === "function";
+  return typeof window !== "undefined" && (Boolean(window.bidDesktop) || typeof window.showDirectoryPicker === "function");
 }
 
 export async function chooseWorkspaceDirectory(startIn?: DirectoryHandleLike | null): Promise<DirectoryHandleLike> {
+  if (window.bidDesktop) return pickDesktopDirectory();
   if (!window.showDirectoryPicker) throw new Error("Directory access is not available in this browser.");
   return window.showDirectoryPicker({ mode: "readwrite", startIn: startIn || undefined });
 }
 
 export async function chooseTaskOutputDirectory(fallbackStartIn?: DirectoryHandleLike | null): Promise<DirectoryHandleLike> {
-  if (!window.showDirectoryPicker) throw new Error("Directory access is not available in this browser.");
+  if (!window.bidDesktop && !window.showDirectoryPicker) throw new Error("Directory access is not available in this browser.");
   const remembered = await restoreDirectoryHandle(TASK_OUTPUT_HANDLE_KEY).catch(() => null);
-  const handle = await window.showDirectoryPicker({ mode: "readwrite", startIn: remembered || fallbackStartIn || undefined });
+  const handle = window.bidDesktop ? await pickDesktopDirectory(TASK_OUTPUT_HANDLE_KEY) : await window.showDirectoryPicker!({ mode: "readwrite", startIn: remembered || fallbackStartIn || undefined });
   await persistDirectoryHandle(TASK_OUTPUT_HANDLE_KEY, handle);
   return handle;
 }
@@ -207,9 +213,9 @@ export async function restoreProjectOutputDirectory(): Promise<DirectoryHandleLi
 }
 
 export async function chooseProjectOutputDirectory(startIn?: DirectoryHandleLike | null): Promise<DirectoryHandleLike> {
-  if (!window.showDirectoryPicker) throw new Error("Directory access is not available in this browser.");
+  if (!window.bidDesktop && !window.showDirectoryPicker) throw new Error("Directory access is not available in this browser.");
   const remembered = await restoreProjectOutputDirectory().catch(() => null);
-  const handle = await window.showDirectoryPicker({ mode: "readwrite", startIn: remembered || startIn || undefined });
+  const handle = window.bidDesktop ? await pickDesktopDirectory(PROJECT_OUTPUT_HANDLE_KEY) : await window.showDirectoryPicker!({ mode: "readwrite", startIn: remembered || startIn || undefined });
   await persistDirectoryHandle(PROJECT_OUTPUT_HANDLE_KEY, handle);
   return handle;
 }
@@ -541,6 +547,17 @@ export async function removeWorkspaceFileFromRelativePath(handle: DirectoryHandl
   let directory = handle;
   for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
   if (directory.removeEntry) await directory.removeEntry(parts.at(-1) as string);
+}
+
+/** Move one existing file to the OS Recycle Bin; never fall back to permanent deletion. */
+export async function trashWorkspaceFileFromRelativePath(handle: DirectoryHandleLike, relativePath: string, expectedFingerprint?: WorkspaceFileFingerprint): Promise<void> {
+  const parts = relativePath.split("/");
+  if (parts.length < 2 || parts.some((part) => !part || part === "." || part === ".." || /[<>:"\\|?*\x00-\x1f]/.test(part))) throw new Error("Invalid workspace file path.");
+  await ensureWritePermission(handle);
+  let directory = handle;
+  for (const part of parts.slice(0, -1)) directory = await directory.getDirectoryHandle(part);
+  if (!directory.trashEntry) throw new Error("当前环境不支持回收站 / The Recycle Bin is unavailable in this environment.");
+  await directory.trashEntry(parts.at(-1) as string, expectedFingerprint);
 }
 
 export type ManagedProjectFileReference = { relativePath: string; sourceId: string };

@@ -1,5 +1,8 @@
 import type { Locale, PresalesRound, PresalesRoundAction, ProjectManifest, SourceDocument } from "./workspace-schema";
-import type { ModelProvider, ModelSettings } from "./model-settings";
+import { desktopAwareFetch } from "./desktop-bridge";
+import { readLocalModelApiKey, readSubscriptionApiKey, type ModelChannel, type ModelSettings, type ModelTask } from "./model-settings";
+import { requestBrowserModel } from "./browser-model";
+import { withBrowserSkillContext } from "./skill-api";
 import { applyFormatOnlyTemplate, FORMAT_ONLY_TEMPLATE_RULE_EN, FORMAT_ONLY_TEMPLATE_RULE_ZH } from "./format-templates";
 import { chineseInteger, presalesRoundDirectory } from "./workspace-storage";
 
@@ -131,33 +134,11 @@ export async function requestPresalesDraft(
   settings: ModelSettings,
   apiKey: string,
   prompt: string,
-  fetcher: typeof fetch = fetch,
-): Promise<{ content: string; model: string; provider: Exclude<ModelProvider, "codex"> }> {
-  if (settings.provider === "codex") throw new Error("CODEX_WORKFLOW_SELECTED");
-  const endpoint = settings.provider === "local" ? settings.localEndpoint : settings.cloudEndpoint;
-  const model = settings.provider === "local" ? settings.localModel : settings.cloudModel;
-  if (!endpoint.trim()) throw new Error("MODEL_ENDPOINT_REQUIRED");
-  if (!model.trim()) throw new Error("MODEL_NAME_REQUIRED");
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  if (apiKey.trim()) headers.Authorization = `Bearer ${apiKey.trim()}`;
-  const response = await fetcher(endpoint.trim(), {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      model: model.trim(),
-      messages: [
-        { role: "system", content: "Produce factual, source-bounded presales documents for human review." },
-        { role: "user", content: prompt },
-      ],
-      temperature: 0.2,
-      stream: false,
-    }),
-  });
-  if (!response.ok) throw new Error(`MODEL_REQUEST_FAILED_${response.status}`);
-  const payload = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const content = payload.choices?.[0]?.message?.content?.trim();
-  if (!content) throw new Error("MODEL_RESPONSE_EMPTY");
-  return { content, model: model.trim(), provider: settings.provider };
+  fetcher: typeof fetch = desktopAwareFetch,
+  task: ModelTask = "draft",
+): Promise<{ content: string; model: string; provider: ModelChannel }> {
+  if (typeof window !== "undefined" && window.bidDesktop?.modelChat && fetcher === desktopAwareFetch) return window.bidDesktop.modelChat({ settings, apiKey, prompt, task });
+  return requestBrowserModel({ settings, apiKey, localApiKey: readLocalModelApiKey(), subscriptionApiKey: readSubscriptionApiKey(), prompt: await withBrowserSkillContext(prompt), task }, fetcher);
 }
 
 export function safeGeneratedFileName(name: string, format: ResponseFileFormat): string {

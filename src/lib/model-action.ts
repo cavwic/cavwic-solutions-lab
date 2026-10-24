@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ModelSettings } from "./model-settings";
+import { getModelProvider, readSubscriptionApiKey, type ModelSettings, type ModelTask } from "./model-settings";
 
 export const MODEL_ACTION_RETURN_STORAGE_KEY = "cavwic-lab-model-action-return";
 
@@ -24,10 +24,14 @@ export const modelActionReturnStateSchema = z.object({
 export type ModelActionReturnState = z.infer<typeof modelActionReturnStateSchema>;
 export type WorkspaceView = z.infer<typeof workspaceViewSchema>;
 
-export function hasBrowserCallableModel(settings: ModelSettings): boolean {
-  if (settings.provider === "codex") return false;
-  const endpoint = settings.provider === "local" ? settings.localEndpoint : settings.cloudEndpoint;
-  const model = settings.provider === "local" ? settings.localModel : settings.cloudModel;
+export function hasBrowserCallableModel(settings: ModelSettings, task: ModelTask = "draft"): boolean {
+  if (settings.provider === "hybrid" && !settings.enabledProviders.includes(settings.hybridRoutes[task])) return false;
+  const provider = getModelProvider(settings, task);
+  if (provider === "codex") return settings.subscriptionProvider !== "codex"
+    ? Boolean(settings.subscriptionEndpoint.trim() && settings.subscriptionModel.trim() && readSubscriptionApiKey().trim())
+    : typeof window !== "undefined" && Boolean(window.bidDesktop?.modelChat);
+  const endpoint = provider === "local" ? settings.localEndpoint : settings.cloudEndpoint;
+  const model = provider === "local" ? settings.localModel : settings.cloudModel;
   return Boolean(endpoint.trim() && model.trim());
 }
 

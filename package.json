@@ -1,6 +1,6 @@
 {
   "name": "cavwic-solutions-lab",
-  "version": "1.0.0",
+  "version": "1.6.0-web.1",
   "private": true,
   "type": "module",
   "scripts": {

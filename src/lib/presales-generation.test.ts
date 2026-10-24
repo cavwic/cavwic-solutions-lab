@@ -25,9 +25,9 @@ describe("presales generation", () => {
     let capturedInit: RequestInit | undefined;
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       capturedInit = init;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "# 响应文件" } }] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "# 响应文件" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
-    const result = await requestPresalesDraft({ ...DEFAULT_MODEL_SETTINGS, provider: "local", localEndpoint: "http://127.0.0.1:9000/v1/chat/completions", localModel: "local-model" }, "", "prompt", fetchMock as typeof fetch);
+    const result = await requestPresalesDraft({ ...DEFAULT_MODEL_SETTINGS, provider: "local", localRuntime: "openai", localEndpoint: "http://127.0.0.1:9000/v1/chat/completions", localModel: "local-model" }, "", "prompt", fetchMock as typeof fetch);
     expect(result.content).toBe("# 响应文件");
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(JSON.parse(String(capturedInit?.body)).model).toBe("local-model");

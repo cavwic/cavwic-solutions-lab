@@ -26,13 +26,16 @@ import {
   RotateCcw,
   Save,
   Settings2,
-  ShieldCheck,
   Sparkles,
   Trash2,
   Upload,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import ModelControls from "./ModelControls";
+import FileCleanupPanel, { type CleanupCategory, type CleanupGeneratedFile, type CleanupSelection } from "./FileCleanupPanel";
+import { executeGeneratedCleanup, previewGeneratedCleanup, type GeneratedCleanupCandidate, type GeneratedCleanupPreview } from "../lib/file-cleanup";
+import type { CleanupPreview as NativeCleanupPreview } from "../lib/desktop-bridge";
 import {
   buildBidFilePrompt,
   buildCodexBidFileTask,
@@ -66,11 +69,11 @@ import {
 import {
   readModelApiKey,
   readModelSettings,
+  type ModelTask,
 } from "../lib/model-settings";
 import {
   consumeModelActionReturnState,
   hasBrowserCallableModel,
-  saveModelActionReturnState,
   type ModelActionReturnState,
   type WorkspaceView,
 } from "../lib/model-action";
@@ -91,6 +94,7 @@ import {
   readGeneratedFileFromDirectory,
   readWorkspaceFileFromRelativePath,
   removeWorkspaceFileFromRelativePath,
+  trashWorkspaceFileFromRelativePath,
   removePersistedSourceFile,
   restoreSourceFiles,
   restoreProjectOutputDirectory,
@@ -166,6 +170,30 @@ import {
   type HandoverTaskStatus,
 } from "../lib/workspace-schema";
 
+declare global {
+  interface BidDesktopWindowControls {
+    windowControl?(action: "minimize" | "maximize" | "close"): void;
+    windowResize?(state: { phase: "start" | "move" | "end"; edge: "n" | "ne" | "e" | "se" | "s" | "sw" | "w" | "nw"; screenX: number; screenY: number }): void;
+    onWindowState?(callback: (state: { maximized: boolean }) => void): (() => void) | void;
+    setLocale?(locale: "zh" | "en"): void;
+    setTheme?(theme: "light" | "dark" | "system"): void;
+    openFile?(input: { name: string; data: Uint8Array }): Promise<string>;
+  }
+  interface Window {
+    bidDesktop?: BidDesktopWindowControls;
+  }
+}
+
+async function openFilePreview(file: Blob, name: string): Promise<void> {
+  if (window.bidDesktop?.openFile) {
+    await window.bidDesktop.openFile({ name, data: new Uint8Array(await file.arrayBuffer()) });
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  window.open(url, "_blank", "noopener,noreferrer");
+  window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 type View = WorkspaceView;
 type Props = { initialView?: View };
 type ModelInvocation = { settings: ReturnType<typeof readModelSettings>; apiKey: string };
@@ -186,8 +214,7 @@ type PendingModelAction =
 
 const copy = {
   zh: {
-    local: "资料只在当前浏览器和您授权的本地目录中处理",
-    project: "解决方案项目工作台",
+    project: "售前解决方案平台",
     projectContext: "项目与边界",
     presales: "售前准备",
     requirements: "招标",
@@ -224,7 +251,7 @@ const copy = {
     evidenced: "已绑定证据",
     approved: "已批准",
     total: "招标要求",
-    saved: "已保存到浏览器",
+    saved: "已保存到本机",
     folderSaved: "项目状态及目录结构已写入本地工作区。",
     projectPathSaved: "项目已保存到所选路径。",
     projectPathRequired: "未设置项目路径，请先在“项目设置”中选择项目路径。",
@@ -235,25 +262,13 @@ const copy = {
     parsing: "正在解析来源文件",
     noRequirement: "选择一条要求查看并编辑响应、偏离和证据。",
     ocr: "该 PDF 几乎没有可提取文字，请先完成 OCR，再导入识别结果。",
-    workspaceEyebrow: "解决方案工作区 / 本地处理",
-    projectEyebrow: "项目 / 边界",
-    meetingEyebrow: "沟通前 / 客户会议",
-    followupEyebrow: "会后跟进",
-    sourceEyebrow: "来源 / 追溯",
-    sourceOnlyEyebrow: "来源",
-    reviewEyebrow: "复核队列",
-    baselineEyebrow: "基线 / 变更",
-    commitmentEyebrow: "承诺基线",
-    handoverEyebrow: "交底 / 交付",
-    localWorkspaceEyebrow: "本地工作区",
     darkMode: "切换到深色模式",
     lightMode: "切换到浅色模式",
     remove: "删除",
     ready: "已就绪",
   },
   en: {
-    local: "Files stay in this browser and the local folder you authorize",
-    project: "Solution Project Workbench",
+    project: "Presales Solution Platform",
     projectContext: "Project and boundary",
     presales: "Presales",
     requirements: "Tender",
@@ -290,7 +305,7 @@ const copy = {
     evidenced: "With evidence",
     approved: "Approved",
     total: "Tender requirements",
-    saved: "Saved in browser",
+    saved: "Saved on this computer",
     folderSaved: "Project state and folder structure were written to the local workspace.",
     projectPathSaved: "Project saved to the selected folder.",
     projectPathRequired: "No project folder is set. Choose one in Project settings first.",
@@ -301,17 +316,6 @@ const copy = {
     parsing: "Parsing source files",
     noRequirement: "Select a requirement to edit its response, deviation, and evidence.",
     ocr: "This PDF contains almost no selectable text. Run OCR and import the recognized text.",
-    workspaceEyebrow: "SOLUTION WORKSPACE / LOCAL FIRST",
-    projectEyebrow: "PROJECT / BOUNDARY",
-    meetingEyebrow: "PRE-CALL / CUSTOMER MEETING",
-    followupEyebrow: "FOLLOW-UP",
-    sourceEyebrow: "SOURCE / TRACEABILITY",
-    sourceOnlyEyebrow: "SOURCE",
-    reviewEyebrow: "REVIEW QUEUE",
-    baselineEyebrow: "BASELINE / CHANGE",
-    commitmentEyebrow: "COMMITMENT BASELINE",
-    handoverEyebrow: "HANDOVER / DELIVERY",
-    localWorkspaceEyebrow: "LOCAL WORKSPACE",
     darkMode: "Switch to dark mode",
     lightMode: "Switch to light mode",
     remove: "Remove",
@@ -550,10 +554,31 @@ function ConfirmableTextarea({
 
 export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [locale, setLocale] = useState<Locale>("zh");
+  const [headerSettingsTarget, setHeaderSettingsTarget] = useState<HTMLElement | null>(null);
+  const solutionApp = useRef<HTMLDivElement>(null);
+  const projectHeader = useRef<HTMLElement>(null);
+  const projectSettingsSection = useRef<HTMLElement>(null);
+  useEffect(() => { setHeaderSettingsTarget(document.getElementById("workbench-header-settings")); }, []);
+  useEffect(() => {
+    const app = solutionApp.current;
+    const header = projectHeader.current;
+    const toolbar = document.querySelector<HTMLElement>(".lab-header");
+    if (!app || !header || !toolbar) return;
+    const measureHeaders = () => {
+      app.style.setProperty("--toolbar-height", `${toolbar.getBoundingClientRect().height}px`);
+      app.style.setProperty("--project-header-height", `${header.getBoundingClientRect().height}px`);
+    };
+    const observer = new ResizeObserver(measureHeaders);
+    observer.observe(toolbar);
+    observer.observe(header);
+    measureHeaders();
+    return () => observer.disconnect();
+  }, []);
   const [view, setView] = useState<View>(initialView);
   const [project, setProject] = useState<ProjectManifest>(() => createEmptyProject("zh"));
   const [ready, setReady] = useState(false);
   const [notice, setNotice] = useState("");
+  const [workspaceRecovery, setWorkspaceRecovery] = useState<{ key: string; content: string; saved: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [selectedSourceId, setSelectedSourceId] = useState("");
   const [selectedRequirementId, setSelectedRequirementId] = useState("");
@@ -566,6 +591,19 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const [outputPathRequired, setOutputPathRequired] = useState(false);
   const [sourceFiles, setSourceFiles] = useState<Map<string, File>>(new Map());
   const [generatedBlobs, setGeneratedBlobs] = useState<Map<string, Blob>>(new Map());
+  const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [cleanupRunning, setCleanupRunning] = useState(false);
+  const [cleanupCategories, setCleanupCategories] = useState<CleanupCategory[]>([]);
+  const [cleanupFiles, setCleanupFiles] = useState<CleanupGeneratedFile[]>([]);
+  const [cleanupMessage, setCleanupMessage] = useState("");
+  const [cleanupError, setCleanupError] = useState("");
+  const cleanupSequence = useRef(0);
+  const cleanupRunningRef = useRef(false);
+  const cleanupSnapshot = useRef<{
+    project: ProjectManifest; directory: DirectoryHandleLike | null; files: Map<string, File>; blobs: Map<string, Blob>;
+    generated: GeneratedCleanupPreview; cache: NativeCleanupPreview | null;
+  } | null>(null);
   const [generatingActionId, setGeneratingActionId] = useState("");
   const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(new Set());
   const [keywordDrafts, setKeywordDrafts] = useState<Record<string, string>>({});
@@ -589,13 +627,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const sourceInput = useRef<HTMLInputElement>(null);
   const archiveInput = useRef<HTMLInputElement>(null);
   const modelChoicePrimary = useRef<HTMLButtonElement>(null);
+  const modelActionAwaitingSettings = useRef<PendingModelAction | null>(null);
   const projectRef = useRef(project);
   const sourceFilesRef = useRef(sourceFiles);
   const knownSourceFilesRef = useRef<Map<string, File>>(new Map());
   const historyRef = useRef(new WorkspaceHistory(3));
   const busyRef = useRef(busy);
   const t = copy[locale];
-  const base = import.meta.env.BASE_URL.replace(/\/$/, "");
 
   projectRef.current = project;
   sourceFilesRef.current = sourceFiles;
@@ -701,29 +739,33 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     let cancelled = false;
     void (async () => {
       const storedLocale = localStorage.getItem("cavwic-lab-locale");
-      const systemLocale: Locale = navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
-      const nextLocale = storedLocale === "zh" || storedLocale === "en" ? storedLocale : systemLocale;
+      const nextLocale: Locale = storedLocale === "en" ? "en" : "zh";
       const storedTheme = localStorage.getItem("cavwic-lab-theme");
       const nextTheme = storedTheme === "dark" || storedTheme === "light" ? storedTheme : matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
       let nextProject = syncProjectStage(createEmptyProject(nextLocale));
       const stored = localStorage.getItem("cavwic-solution-workspace");
       if (stored) {
-        const parsed = projectManifestSchema.safeParse(JSON.parse(stored));
-        if (parsed.success) {
-          nextProject = syncProjectStage(localizeBuiltInProject(parsed.data, nextLocale));
+        try {
+          const parsed = projectManifestSchema.parse(JSON.parse(stored));
+          nextProject = syncProjectStage(localizeBuiltInProject(parsed, nextLocale));
           if (nextProject.handover.awardNotes === "Award scope confirmed for local review.") {
             nextProject = {
               ...nextProject,
               handover: { ...nextProject.handover, awardNotes: "" },
             };
           }
+        } catch {
+          const recoveryKey = `cavwic-solution-workspace-recovery-${Date.now()}`;
+          let saved = false;
+          try { localStorage.setItem(recoveryKey, stored); saved = true; } catch { /* Keep the original value and offer a file backup. */ }
+          setWorkspaceRecovery({ key: recoveryKey, content: stored, saved });
         }
       }
       if (!localStorage.getItem(emptyPresalesMigrationKey)) {
         if (nextProject.presalesRounds.length === 1 && isLegacyUntouchedPresalesRound(nextProject.presalesRounds[0])) {
           nextProject = { ...nextProject, presalesRounds: [] };
         }
-        localStorage.setItem(emptyPresalesMigrationKey, "1");
+        try { localStorage.setItem(emptyPresalesMigrationKey, "1"); } catch { /* Workspace recovery also works when the cache is full. */ }
       }
       const restoredHandle = await restoreWorkspaceDirectory().catch(() => null);
       const restoredOutputHandle = await restoreProjectOutputDirectory().catch(() => null);
@@ -773,7 +815,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || workspaceRecovery) return;
     const undo = () => { void applyHistory("undo"); };
     const redo = () => { void applyHistory("redo"); };
     const publish = () => publishHistoryState();
@@ -786,11 +828,23 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       window.removeEventListener("cavwic-history-redo", redo);
       window.removeEventListener("cavwic-history-request", publish);
     };
-  }, [directoryHandle, locale, ready]);
+  }, [directoryHandle, locale, ready, workspaceRecovery]);
 
   useEffect(() => {
     if (ready) publishHistoryState();
   }, [busy, ready]);
+
+  useEffect(() => {
+    const resume = () => {
+      const pending = modelActionAwaitingSettings.current;
+      if (!pending) return;
+      modelActionAwaitingSettings.current = null;
+      setResumeModelAction(pending);
+      window.requestAnimationFrame(() => document.getElementById(pending.anchorId)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    };
+    window.addEventListener("bid-model-settings-saved", resume);
+    return () => window.removeEventListener("bid-model-settings-saved", resume);
+  }, []);
 
   useEffect(() => {
     if (!ready || view !== "outputs") return;
@@ -802,6 +856,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const next = (event as CustomEvent<Locale>).detail;
       if (next !== "zh" && next !== "en") return;
       setLocale(next);
+      if (workspaceRecovery) return;
       setProject((current) => {
         const nextProject = syncProjectStage(localizeBuiltInProject(current, next));
         try { localStorage.setItem("cavwic-solution-workspace", JSON.stringify(nextProject)); } catch { /* The project directory remains the fallback. */ }
@@ -810,7 +865,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     };
     window.addEventListener("cavwic-locale-change", handleLocaleChange);
     return () => window.removeEventListener("cavwic-locale-change", handleLocaleChange);
-  }, []);
+  }, [workspaceRecovery]);
 
   useEffect(() => {
     if (!ready || !returnState) return;
@@ -824,30 +879,30 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   }, [ready, returnState, view]);
 
   useEffect(() => {
-    if (pendingModelAction || ocrChoiceSourceIds || projectPathRequired || outputPathRequired) modelChoicePrimary.current?.focus();
-  }, [ocrChoiceSourceIds, outputPathRequired, pendingModelAction, projectPathRequired]);
+    if (pendingModelAction || ocrChoiceSourceIds || projectPathRequired || outputPathRequired || workspaceRecovery) modelChoicePrimary.current?.focus();
+  }, [ocrChoiceSourceIds, outputPathRequired, pendingModelAction, projectPathRequired, workspaceRecovery]);
 
   useEffect(() => {
-    if (!ready) return;
+    if (!ready || workspaceRecovery) return;
     try {
       localStorage.setItem("cavwic-solution-workspace", JSON.stringify({ ...project, updatedAt: new Date().toISOString() }));
       setNotice(t.saved);
       const timer = window.setTimeout(() => setNotice(""), 1100);
       return () => window.clearTimeout(timer);
     } catch {
-      setNotice(locale === "zh" ? "项目过大，请写入本地工作区目录。" : "Project is too large for browser storage. Write it to a local workspace folder.");
+      setNotice(locale === "zh" ? "项目缓存空间不足，请写入项目目录。" : "The local cache is full. Save the project to its folder.");
     }
-  }, [project, locale, ready, t.saved]);
+  }, [project, locale, ready, t.saved, workspaceRecovery]);
 
   useEffect(() => {
-    if (!ready || !isUsableProjectDirectory(directoryHandle)) return;
+    if (!ready || workspaceRecovery || !isUsableProjectDirectory(directoryHandle)) return;
     const timer = window.setTimeout(() => {
       void saveProjectStateToDirectory(directoryHandle, project, sourceFiles)
         .then(() => setNotice(t.projectPathSaved))
         .catch(() => setNotice(locale === "zh" ? "项目路径授权已失效，请重新选择。" : "Project folder access expired. Choose it again."));
     }, 700);
     return () => window.clearTimeout(timer);
-  }, [directoryHandle, locale, project, ready, sourceFiles, t.projectPathSaved]);
+  }, [directoryHandle, locale, project, ready, sourceFiles, t.projectPathSaved, workspaceRecovery]);
 
   useEffect(() => {
     if (!ready || !filesHydrated || !sourceFiles.size) return;
@@ -1445,10 +1500,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     }
   };
 
-  const configuredModel = (): ModelInvocation | null => {
+  const configuredModel = (task: ModelTask = "draft"): ModelInvocation | null => {
     const currentSettings = readModelSettings();
     const currentApiKey = readModelApiKey();
-    if (hasBrowserCallableModel(currentSettings)) return { settings: currentSettings, apiKey: currentApiKey };
+    if (hasBrowserCallableModel(currentSettings, task)) return { settings: currentSettings, apiKey: currentApiKey };
     return null;
   };
 
@@ -1545,14 +1600,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const openSourceFile = async (source: SourceDocument) => {
-    const file = await resolveSourceFile(source);
-    if (!file) {
-      setNotice(locale === "zh" ? "当前浏览器中找不到原始文件，请重新导入或选择项目路径。" : "The original file is unavailable. Import it again or select the project folder.");
-      return;
+    try {
+      const file = await resolveSourceFile(source);
+      if (!file) throw new Error("FILE_NOT_AVAILABLE");
+      await openFilePreview(file, source.name);
+    } catch {
+      setNotice(locale === "zh" ? "本机缓存中找不到原始文件，请重新导入或选择项目路径。" : "The original file is unavailable. Import it again or select the project folder.");
     }
-    const url = URL.createObjectURL(file);
-    window.open(url, "_blank", "noopener,noreferrer");
-    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const preprocessTenderSources = (sourceIds: string[]) => {
@@ -1635,7 +1689,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const confirmTenderOcr = () => {
     const sourceIds = ocrChoiceSourceIds || [];
     setOcrChoiceSourceIds(null);
-    const invocation = configuredModel();
+    const invocation = configuredModel("ocr");
     if (invocation) {
       void performTenderOcr(sourceIds, invocation);
       return;
@@ -1773,7 +1827,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const prompt = kind === "analysis"
         ? buildTenderAnalysisPrompt(project, inputs.tenderSources, inputs.clarificationSources, inputs.templates, locale)
         : buildTenderComparisonPrompt(project, inputs.presalesSources, inputs.tenderSources, inputs.clarificationSources, inputs.templates, locale);
-      const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
+      const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt, undefined, "analysis");
       const extracted = extractTenderStructuredData(draft.content);
       const resultName = nextTenderResultName(kind);
       const templateFile = await resolvePrimaryTemplateFile(inputs.templates);
@@ -1862,14 +1916,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const openTenderResult = async (result: TenderAnalysisResult) => {
-    const file = generatedBlobs.get(result.id) || sourceFiles.get(result.sourceId) || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, result.relativePath).catch(() => null) : null);
-    if (!file) {
+    try {
+      const file = generatedBlobs.get(result.id) || sourceFiles.get(result.sourceId) || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, result.relativePath).catch(() => null) : null);
+      if (!file) throw new Error("FILE_NOT_AVAILABLE");
+      await openFilePreview(file, result.fileName);
+    } catch {
       setNotice(locale === "zh" ? "找不到分析结果文件，请重新选择项目路径。" : "The analysis result is unavailable. Select the project folder again.");
-      return;
     }
-    const url = URL.createObjectURL(file);
-    window.open(url, "_blank", "noopener,noreferrer");
-    window.setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const removeTenderResult = async (result: TenderAnalysisResult) => {
@@ -1903,7 +1956,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const startTenderAnalysis = (kind: "analysis" | "comparison") => {
     if (!requireProjectDirectory()) return;
     if (!tenderAnalysisInputs(kind)) return;
-    const invocation = configuredModel();
+    const invocation = configuredModel("analysis");
     if (invocation) {
       void runTenderAnalysis(kind, invocation);
       return;
@@ -1912,30 +1965,10 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const rememberModelActionAndOpenSettings = async (pending: PendingModelAction) => {
-    try {
-      localStorage.setItem("cavwic-solution-workspace", JSON.stringify({ ...project, updatedAt: new Date().toISOString() }));
-      await persistSourceFiles(project.id, sourceFiles);
-    } catch {
-      // The authorized project directory remains the source of truth when browser storage is full.
-    }
-    const returnPath = `${window.location.pathname}${window.location.search}`;
-    saveModelActionReturnState({
-      schemaVersion: "1.0.0",
-      action: pending.kind,
-      returnPath,
-      view,
-      anchorId: pending.anchorId,
-      scrollY: Math.max(0, window.scrollY),
-      selectedSourceId,
-      selectedRequirementId,
-      selectedActionIds: [...selectedActionIds],
-      expandedAnalysisId,
-      targetIds: pending.kind === "tender-ocr" ? pending.sourceIds : pending.kind === "response-files" ? pending.actionIds : pending.kind === "bid-output" ? [pending.bidFileId] : [],
-      taskKind,
-      savedAt: new Date().toISOString(),
-    });
+    modelActionAwaitingSettings.current = pending;
     setPendingModelAction(null);
-    window.location.href = `${base}/model-settings?return=${encodeURIComponent(returnPath)}`;
+    const task: ModelTask = pending.kind === "tender-ocr" ? "ocr" : pending.kind === "response-files" || pending.kind === "bid-output" ? "draft" : "analysis";
+    window.dispatchEvent(new CustomEvent("bid-model-settings-open", { detail: { task } }));
   };
 
   const customerAnalysisInputs = (round: PresalesRound) => {
@@ -1968,7 +2001,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     setBusy(true);
     try {
       const prompt = buildCustomerNeedsAnalysisPrompt(project, round, selectedSources, selectedTemplates, locale);
-      const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
+      const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt, undefined, "analysis");
       const roundIndex = Math.max(0, project.presalesRounds.findIndex((item) => item.id === round.id));
       const baseName = locale === "zh" ? `第${chineseInteger(roundIndex + 1)}次沟通需求分析` : `Communication ${roundIndex + 1} requirements analysis`;
       const resultName = uniqueAnalysisResultName(baseName, round.analysisResults);
@@ -2030,9 +2063,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, result.relativePath) : null);
       if (!file) throw new Error("FILE_NOT_AVAILABLE");
       if (result.format === "md") {
-        const url = URL.createObjectURL(file);
-        window.open(url, "_blank", "noopener,noreferrer");
-        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+        await openFilePreview(file, result.fileName);
       } else downloadBlob(result.fileName, file);
     } catch {
       setNotice(locale === "zh" ? "找不到该分析文件，请重新选择项目路径。" : "The analysis file is unavailable. Select the project folder again.");
@@ -2160,7 +2191,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
   const startCustomerAnalysis = (round: PresalesRound) => {
     if (!requireProjectDirectory()) return;
-    const invocation = configuredModel();
+    const invocation = configuredModel("analysis");
     if (invocation) {
       void analyzeCustomerSources(round, invocation);
       return;
@@ -2333,9 +2364,26 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const draft = await requestPresalesDraft(invocation.settings, invocation.apiKey, prompt);
       const templateFile = await resolvePrimaryTemplateFile(inputs.templates);
       const generated = await createTenderGeneratedFile(draft.content, item.title, inputs.outputFormat, templateFile);
+      const outputDirectory = `${bidItemDirectory(item.title)}/生成文件`;
+      const existingOutputNames = new Set([
+        ...item.generatedFiles.map((record) => record.name.toLowerCase()),
+        ...project.sources.filter((source) => source.workspacePath.startsWith(`${outputDirectory}/`)).map((source) => source.name.toLowerCase()),
+      ]);
+      let nameExists = existingOutputNames.has(generated.name.toLowerCase());
+      if (!nameExists && isUsableProjectDirectory(directoryHandle)) {
+        try { await readWorkspaceFileFromRelativePath(directoryHandle, `${outputDirectory}/${generated.name}`); nameExists = true; } catch (error) {
+          if (!(error instanceof DOMException && error.name === "NotFoundError")) throw error;
+        }
+      }
+      if (nameExists) {
+        const generatedAt = new Date();
+        const pad = (value: number) => String(value).padStart(2, "0");
+        const stamp = `${generatedAt.getFullYear()}${pad(generatedAt.getMonth() + 1)}${pad(generatedAt.getDate())}-${pad(generatedAt.getHours())}${pad(generatedAt.getMinutes())}${pad(generatedAt.getSeconds())}`;
+        const extension = `.${inputs.outputFormat}`;
+        generated.name = `${generated.name.slice(0, -extension.length)}_${stamp}-${createId("revision").slice(-8)}${extension}`;
+      }
       const generatedFile = new File([generated.blob], generated.name, { type: generated.blob.type });
       const parsedOutput = await parseSourceFile(generatedFile);
-      const outputDirectory = `${bidItemDirectory(item.title)}/生成文件`;
       const relativePath = isUsableProjectDirectory(directoryHandle)
         ? `${outputDirectory}/${generated.name}`
         : `downloads/${generated.name}`;
@@ -2404,9 +2452,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const file = generatedBlobs.get(record.id) || sourceFiles.get(record.sourceId) || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, record.relativePath) : null);
       if (!file) throw new Error("FILE_NOT_AVAILABLE");
       if (record.format === "md") {
-        const url = URL.createObjectURL(file);
-        window.open(url, "_blank", "noopener,noreferrer");
-        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+        await openFilePreview(file, record.name);
       } else downloadBlob(record.name, file);
     } catch {
       setNotice(locale === "zh" ? "找不到该投标文件，请重新选择项目路径。" : "The bid file is unavailable. Select the project folder again.");
@@ -2681,7 +2727,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   const startHandoverTaskSplit = () => {
-    const invocation = configuredModel();
+    const invocation = configuredModel("analysis");
     if (invocation) {
       void runHandoverTaskSplit(invocation);
       return;
@@ -2691,14 +2737,15 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   };
 
   useEffect(() => {
-    if (!ready || !filesHydrated || !resumeModelAction) return;
+    if (!ready || workspaceRecovery || !filesHydrated || !resumeModelAction) return;
     const pending = resumeModelAction;
     setResumeModelAction(null);
     if (!isUsableProjectDirectory(directoryHandle)) {
       setProjectPathRequired(true);
       return;
     }
-    const invocation = configuredModel();
+    const task: ModelTask = pending.kind === "tender-ocr" ? "ocr" : pending.kind === "response-files" || pending.kind === "bid-output" ? "draft" : "analysis";
+    const invocation = configuredModel(task);
     if (!invocation) {
       setPendingModelAction(pending);
       return;
@@ -2711,7 +2758,13 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       if (item) void generateBidFile(item, invocation);
     }
     else if (pending.kind === "handover-task-split") void runHandoverTaskSplit(invocation);
-  }, [directoryHandle, filesHydrated, ready, resumeModelAction]);
+    else if (pending.kind === "customer-analysis" || pending.kind === "response-files") {
+      const round = project.presalesRounds.find((item) => item.id === pending.roundId);
+      if (!round) return;
+      if (pending.kind === "customer-analysis") void analyzeCustomerSources(round, invocation);
+      else void generatePresalesFiles(round, round.actions.filter((action) => pending.actionIds.includes(action.id)), invocation);
+    }
+  }, [directoryHandle, filesHydrated, ready, resumeModelAction, workspaceRecovery]);
 
   const saveTenderTask = async (task: { name: string; content: string }) => {
     setBusy(true);
@@ -2781,9 +2834,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       const file = generatedBlobs.get(record.id) || sourceFiles.get(record.sourceId) || (directoryHandle ? await readWorkspaceFileFromRelativePath(directoryHandle, record.relativePath).catch(() => readGeneratedFileFromDirectory(directoryHandle, project, record.name)) : null);
       if (!file) throw new Error("FILE_NOT_AVAILABLE");
       if (record.format === "md") {
-        const url = URL.createObjectURL(file);
-        window.open(url, "_blank", "noopener,noreferrer");
-        window.setTimeout(() => URL.revokeObjectURL(url), 60000);
+        await openFilePreview(file, record.name);
       } else downloadBlob(record.name, file);
     } catch {
       setNotice(locale === "zh" ? "当前会话中找不到该文件，请重新选择项目路径后再试。" : "The file is unavailable in this session. Select the project folder and try again.");
@@ -2878,6 +2929,36 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     } catch { setNotice(t.invalid); }
     finally { setBusy(false); if (archiveInput.current) archiveInput.current.value = ""; }
   };
+  const restoreWorkspaceAfterCacheFailure = async () => {
+    setBusy(true);
+    try {
+      const handle = await chooseWorkspaceDirectory(directoryHandle);
+      const restoredProject = syncProjectStage(await loadActiveProject(handle));
+      const restoredFiles = await loadSourceFilesFromDirectory(handle, restoredProject);
+      await persistWorkspaceDirectory(handle);
+      historyRef.current.reset();
+      commitProject(restoredProject, "", false);
+      setDirectoryHandle(handle);
+      setSourceFiles(restoredFiles);
+      knownSourceFilesRef.current = new Map(restoredFiles);
+      setResumeModelAction(null);
+      setReturnState(null);
+      setWorkspaceRecovery(null);
+      setNotice(t.loaded);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        setNotice(locale === "zh" ? "未能读取项目，请选择包含 workspace.json 的原项目目录。原始缓存已保留。" : "Choose the original project folder containing workspace.json. The original cache has been preserved.");
+      }
+    } finally { setBusy(false); }
+  };
+  const startNewWorkspaceAfterCacheFailure = () => {
+    if (!workspaceRecovery) return;
+    downloadBlob(`${workspaceRecovery.key}.json`, new Blob([workspaceRecovery.content], { type: "application/json" }));
+    setDirectoryHandle(null);
+    setResumeModelAction(null);
+    setReturnState(null);
+    setWorkspaceRecovery(null);
+  };
   const setOutputPathsChecked = (paths: string[], checked: boolean) => setSelectedOutputPaths((current) => {
     const next = new Set(current);
     paths.forEach((path) => checked ? next.add(path) : next.delete(path));
@@ -2941,8 +3022,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
   const renderProjectContext = () => <section className="work-section">
     <div className="section-heading">
-      <div><p>{t.projectEyebrow}</p><h2>{t.projectContext}</h2></div>
-      <span>{project.schemaVersion}</span>
+      <div><h2>{t.projectContext}</h2></div>
     </div>
     <div className="field-grid">
       <Field label={t.projectName}><input value={project.name} onChange={(event) => updateProject("name", event.target.value)} /></Field>
@@ -2959,7 +3039,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
   const renderPresales = () => <>
     {renderProjectContext()}
     <section className="work-section">
-      <div className="section-heading"><div><p>{t.meetingEyebrow}</p><h2>{locale === "zh" ? "客户沟通与文件响应" : "Customer communications and file responses"}</h2></div><button className="icon-command" type="button" onClick={() => void addPresalesRound()} title={locale === "zh" ? "新增沟通节点" : "Add communication node"} aria-label={locale === "zh" ? "新增沟通节点" : "Add communication node"}><Plus size={18}/></button></div>
+      <div className="section-heading"><div><h2>{locale === "zh" ? "客户沟通与文件响应" : "Customer communications and file responses"}</h2></div><button className="icon-command" type="button" onClick={() => void addPresalesRound()} title={locale === "zh" ? "新增沟通节点" : "Add communication node"} aria-label={locale === "zh" ? "新增沟通节点" : "Add communication node"}><Plus size={18}/></button></div>
       <div className="presales-rounds">
         <div className="presales-round-head"><span>{locale === "zh" ? "沟通节点" : "Communication"}</span><span>{locale === "zh" ? "客户信息及需求" : "Customer information and needs"}</span><span>{locale === "zh" ? "执行清单与生成要求" : "Actions and generation request"}</span><span>{locale === "zh" ? "生成文件列表" : "Generated files"}</span></div>
         {project.presalesRounds.map((round, roundIndex) => {
@@ -3100,7 +3180,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const comparisonResults = project.tenderComparison.results;
     return <>
       <section className="work-section" id="tender-files">
-        <div className="section-heading"><div><p>{locale === "zh" ? "招标输入 / 预处理" : "TENDER INPUT / PREPROCESSING"}</p><h2>{t.sourceLibrary}</h2><span className="section-description">{t.noSource}</span></div><button className="command-button" type="button" disabled={busy} onClick={() => openGuardedFilePicker(sourceInput.current)}><Upload size={17}/>{t.importSources}</button></div>
+        <div className="section-heading"><div><h2>{t.sourceLibrary}</h2><span className="section-description">{t.noSource}</span></div><button className="command-button" type="button" disabled={busy} onClick={() => openGuardedFilePicker(sourceInput.current)}><Upload size={17}/>{t.importSources}</button></div>
         <input ref={sourceInput} hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importTenderFiles(event.target.files, { kind: "tender" }); event.currentTarget.value = ""; }}/>
         {tenderSources.length ? <>
           <div className="tender-file-toolbar"><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? "全选招标文件" : "Select all tender files"} checked={allTenderSelected} onChange={(event) => updateProject("selectedTenderSourceIds", event.target.checked ? [...project.tenderSourceIds] : [])}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label><button type="button" disabled={!project.selectedTenderSourceIds.length || busy} onClick={() => preprocessTenderSources(project.selectedTenderSourceIds)}><RefreshCw size={16}/>{locale === "zh" ? "预处理" : "Preprocess"}</button><button type="button" className="danger-command" disabled={busy} onClick={() => void removeTenderSources(project.tenderSourceIds)}><Trash2 size={16}/>{locale === "zh" ? "删除全部导入文件" : "Delete all imported files"}</button></div>
@@ -3109,7 +3189,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       </section>
 
       <section className="work-section tender-clarifications">
-        <div className="section-heading"><div><p>{locale === "zh" ? "补遗 / 澄清" : "ADDENDA / CLARIFICATIONS"}</p><h2>{locale === "zh" ? "澄清及相关文件" : "Clarifications and related files"}</h2></div><button className="icon-command" type="button" aria-label={locale === "zh" ? "新增澄清节点" : "Add clarification node"} onClick={() => void addTenderClarificationRound()}><Plus size={18}/></button></div>
+        <div className="section-heading"><div><h2>{locale === "zh" ? "澄清及相关文件" : "Clarifications and related files"}</h2></div><button className="icon-command" type="button" aria-label={locale === "zh" ? "新增澄清节点" : "Add clarification node"} onClick={() => void addTenderClarificationRound()}><Plus size={18}/></button></div>
         <div className="clarification-head"><span>{locale === "zh" ? "时间节点" : "Timeline"}</span><span>{locale === "zh" ? "澄清文件" : "Clarification files"}</span></div>
         {project.tenderClarificationRounds.map((round) => <article className="clarification-row" id={`clarification-${round.id}`} key={round.id}>
           <div className="clarification-node">
@@ -3127,9 +3207,9 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       </section>
 
       <section className="work-section" id="tender-analysis">
-        <div className="section-heading"><div><p>{locale === "zh" ? "要求 / 基线" : "REQUIREMENTS / BASELINE"}</p><h2>{locale === "zh" ? "招标文件分析" : "Tender file analysis"}</h2></div></div>
+        <div className="section-heading"><div><h2>{locale === "zh" ? "招标文件分析" : "Tender file analysis"}</h2></div></div>
         <div className="tender-analysis-grid">
-          <div className="tender-analysis-pane"><div className="pane-title"><div><p>{locale === "zh" ? "要求提炼" : "REQUIREMENT EXTRACTION"}</p><h3>{locale === "zh" ? "招标要求分析" : "Tender requirement analysis"}</h3></div></div>
+          <div className="tender-analysis-pane"><div className="pane-title"><div><h3>{locale === "zh" ? "招标要求分析" : "Tender requirement analysis"}</h3></div></div>
             <div className="analysis-config-block keyword-config"><strong>{locale === "zh" ? "关键词" : "Keywords"}</strong><div className="keyword-input-row"><input aria-label={locale === "zh" ? "新增招标分析关键词" : "New tender keyword"} value={tenderKeywordDraft} onChange={(event) => setTenderKeywordDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); const value = tenderKeywordDraft.trim(); if (value && !project.tenderAnalysis.keywords.includes(value)) updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: [...project.tenderAnalysis.keywords, value] }); setTenderKeywordDraft(""); } }}/><button className="icon-command" type="button" aria-label={locale === "zh" ? "添加招标分析关键词" : "Add tender keyword"} onClick={() => { const value = tenderKeywordDraft.trim(); if (value && !project.tenderAnalysis.keywords.includes(value)) updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: [...project.tenderAnalysis.keywords, value] }); setTenderKeywordDraft(""); }}><Plus size={17}/></button></div><div className="recommended-keywords"><span>{locale === "zh" ? "推荐关键词" : "Recommended"}</span><div>{recommendedAnalysisKeywords[locale].map((keyword) => <button type="button" key={keyword} disabled={project.tenderAnalysis.keywords.includes(keyword)} onClick={() => updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: [...project.tenderAnalysis.keywords, keyword] })}>{keyword}</button>)}</div></div>{project.tenderAnalysis.keywords.length > 0 && <div className="selected-keywords">{project.tenderAnalysis.keywords.map((keyword) => <span key={keyword}>{keyword}<button type="button" aria-label={locale === "zh" ? `删除招标分析关键词 ${keyword}` : `Delete tender keyword ${keyword}`} onClick={() => updateProject("tenderAnalysis", { ...project.tenderAnalysis, keywords: project.tenderAnalysis.keywords.filter((item) => item !== keyword) })}><X size={13}/></button></span>)}</div>}</div>
             <ConfirmableTextarea fieldId="tender-analysis-requirements" label={locale === "zh" ? "分析要求" : "Analysis requirements"} ariaLabel={locale === "zh" ? "招标分析要求" : "Tender analysis requirements"} locale={locale} rows={6} value={project.tenderAnalysis.analysisRequirements} confirmed={project.confirmedTextFields.includes("tender-analysis-requirements")} onChange={(value) => updateProject("tenderAnalysis", { ...project.tenderAnalysis, analysisRequirements: value })} onConfirmedChange={(confirmed) => setTextFieldConfirmed("tender-analysis-requirements", confirmed)} placeholder={locale === "zh" ? "说明需要提炼的时间、参数、评标、资质、废标项和投标文件清单" : "Describe deadlines, parameters, scoring, qualifications, rejection rules, and the bid-file checklist to extract"}/>
             {renderTenderTemplates("analysis")}
@@ -3137,7 +3217,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
             {project.tenderAnalysis.results.length > 0 && <div className="analysis-result-list"><strong>{locale === "zh" ? "分析结果" : "Analysis results"}</strong>{project.tenderAnalysis.results.map((result) => <article className={expandedTenderResultId === result.id ? "expanded" : ""} key={result.id}><div><button type="button" onClick={() => { setExpandedTenderResultId(expandedTenderResultId === result.id ? "" : result.id); updateProject("tenderAnalysis", { ...project.tenderAnalysis, analysisRequirements: result.prompt }); }}><FileCheck2 size={16}/><span>{result.name}</span></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除分析结果 ${result.name}` : `Delete analysis result ${result.name}`} onClick={() => void removeTenderResult(result)}><X size={14}/></button></div>{expandedTenderResultId === result.id && <button className="open-analysis-file" type="button" onClick={() => void openTenderResult(result)}><ExternalLink size={15}/>{locale === "zh" ? `打开文件 · ${result.fileName}` : `Open file · ${result.fileName}`}</button>}</article>)}</div>}
           </div>
 
-          <div className="tender-analysis-pane"><div className="pane-title"><div><p>{locale === "zh" ? "阶段对比" : "STAGE COMPARISON"}</p><h3>{locale === "zh" ? "售前文件对比" : "Presales file comparison"}</h3></div></div>
+          <div className="tender-analysis-pane"><div className="pane-title"><div><h3>{locale === "zh" ? "售前文件对比" : "Presales file comparison"}</h3></div></div>
             <div className="presales-source-selector"><div className="analysis-panel-heading"><strong>{locale === "zh" ? "售前阶段文件" : "Presales files"}</strong><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? "全选售前文件" : "Select all presales files"} disabled={!allPresalesIds.length} checked={allPresalesSelected} onChange={(event) => updateProject("tenderComparison", { ...project.tenderComparison, selectedPresalesSourceIds: event.target.checked ? allPresalesIds : [] })}/><span><Check size={13}/></span>{locale === "zh" ? "全选" : "Select all"}</label></div>{presalesGroups.map((group) => <div className="presales-source-group" key={group.id}><strong>{group.label}</strong>{group.ids.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source)).map((source) => <label key={source.id}><input type="checkbox" checked={project.tenderComparison.selectedPresalesSourceIds.includes(source.id)} onChange={(event) => updateProject("tenderComparison", { ...project.tenderComparison, selectedPresalesSourceIds: event.target.checked ? [...new Set([...project.tenderComparison.selectedPresalesSourceIds, source.id])] : project.tenderComparison.selectedPresalesSourceIds.filter((id) => id !== source.id) })}/><span><Check size={13}/></span><FileText size={15}/>{source.name}</label>)}{!group.ids.length && <small>{locale === "zh" ? "暂无文件" : "No files"}</small>}</div>)}</div>
             {renderTenderTemplates("comparison")}
             <button className="generate-command analysis-command" type="button" disabled={busy || !project.selectedTenderSourceIds.length || !project.tenderComparison.selectedPresalesSourceIds.length} onClick={() => startTenderAnalysis("comparison")}><Sparkles size={17}/>{generatingActionId === "tender-comparison" ? (locale === "zh" ? "正在对比" : "Comparing") : (locale === "zh" ? "对比" : "Compare")}</button>
@@ -3145,14 +3225,14 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
         </div>
       </section>
 
-      <section className="work-section"><div className="section-heading"><div><p>{t.baselineEyebrow}</p><h2>{t.baselineDiff}</h2></div><span>{comparisonResults.length}</span></div><div className="tender-difference-results">{comparisonResults.map((result) => <article key={result.id}><header><button type="button" onClick={() => void openTenderResult(result)}><FileSpreadsheet size={18}/><span><strong>{result.name}</strong><small>{result.fileName} · {new Date(result.createdAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}</small></span><ExternalLink size={15}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除对比结果 ${result.name}` : `Delete comparison ${result.name}`} onClick={() => void removeTenderResult(result)}><Trash2 size={16}/></button></header>{result.differences.map((difference, index) => <div className="diff-list" key={`${result.id}-${index}`}><div><span className={`relation ${difference.relation}`}>{diffRelationLabels[locale][difference.relation]}</span><p>{difference.presales || (locale === "zh" ? "未提供" : "Not provided")}</p><ChevronRight size={16}/><p>{difference.tender || (locale === "zh" ? "未提供" : "Not provided")}</p></div></div>)}</article>)}{!comparisonResults.length && <div className="empty-state"><FileSpreadsheet size={26}/><p>{locale === "zh" ? "完成售前文件对比后，结果会按分析批次显示在这里。" : "Comparison results will appear here by analysis run."}</p></div>}</div></section>
+      <section className="work-section"><div className="section-heading"><div><h2>{t.baselineDiff}</h2></div><span>{comparisonResults.length}</span></div><div className="tender-difference-results">{comparisonResults.map((result) => <article key={result.id}><header><button type="button" onClick={() => void openTenderResult(result)}><FileSpreadsheet size={18}/><span><strong>{result.name}</strong><small>{result.fileName} · {new Date(result.createdAt).toLocaleString(locale === "zh" ? "zh-CN" : "en-US")}</small></span><ExternalLink size={15}/></button><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除对比结果 ${result.name}` : `Delete comparison ${result.name}`} onClick={() => void removeTenderResult(result)}><Trash2 size={16}/></button></header>{result.differences.map((difference, index) => <div className="diff-list" key={`${result.id}-${index}`}><div><span className={`relation ${difference.relation}`}>{diffRelationLabels[locale][difference.relation]}</span><p>{difference.presales || (locale === "zh" ? "未提供" : "Not provided")}</p><ChevronRight size={16}/><p>{difference.tender || (locale === "zh" ? "未提供" : "Not provided")}</p></div></div>)}</article>)}{!comparisonResults.length && <div className="empty-state"><FileSpreadsheet size={26}/><p>{locale === "zh" ? "完成售前文件对比后，结果会按分析批次显示在这里。" : "Comparison results will appear here by analysis run."}</p></div>}</div></section>
 
-      <section className="work-section"><div className="section-heading"><div><p>{locale === "zh" ? "组包输入 / 清单" : "PACKAGE INPUT / CHECKLIST"}</p><h2>{locale === "zh" ? "投标文件清单" : "Bid file checklist"}</h2></div><span>{project.bidFileChecklist.length}</span></div><div className="bid-file-checklist">{project.bidFileChecklist.map((item) => <div key={item.id}><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `确认投标文件 ${item.title}` : `Confirm bid file ${item.title}`} checked={item.status === "confirmed"} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, status: event.target.checked ? "confirmed" : "pending" } : entry))}/><span><Check size={13}/></span></label><select aria-label={locale === "zh" ? `文件类别 ${item.title}` : `File category ${item.title}`} value={item.category} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, category: event.target.value as BidFileChecklistItem["category"] } : entry))}>{Object.entries(bidFileCategoryLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><input aria-label={locale === "zh" ? "投标文件名称" : "Bid file name"} value={item.title} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, title: event.target.value } : entry))}/><input aria-label={locale === "zh" ? `投标文件说明 ${item.title}` : `Bid file notes ${item.title}`} placeholder={locale === "zh" ? "来源、责任人或待确认事项" : "Source, owner, or open questions"} value={item.notes} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, notes: event.target.value } : entry))}/><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除投标文件 ${item.title}` : `Delete bid file ${item.title}`} onClick={() => void removeBidChecklistItem(item)}><Trash2 size={16}/></button></div>)}</div>{!project.bidFileChecklist.length && <div className="empty-state"><FileOutput size={26}/><p>{locale === "zh" ? "招标要求分析后，识别到的投标文件会逐项加入清单。" : "Files identified by tender analysis will be added here."}</p></div>}</section>
+      <section className="work-section"><div className="section-heading"><div><h2>{locale === "zh" ? "投标文件清单" : "Bid file checklist"}</h2></div><span>{project.bidFileChecklist.length}</span></div><div className="bid-file-checklist">{project.bidFileChecklist.map((item) => <div key={item.id}><label className="compact-check"><input type="checkbox" aria-label={locale === "zh" ? `确认投标文件 ${item.title}` : `Confirm bid file ${item.title}`} checked={item.status === "confirmed"} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, status: event.target.checked ? "confirmed" : "pending" } : entry))}/><span><Check size={13}/></span></label><select aria-label={locale === "zh" ? `文件类别 ${item.title}` : `File category ${item.title}`} value={item.category} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, category: event.target.value as BidFileChecklistItem["category"] } : entry))}>{Object.entries(bidFileCategoryLabels[locale]).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><input aria-label={locale === "zh" ? "投标文件名称" : "Bid file name"} value={item.title} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, title: event.target.value } : entry))}/><input aria-label={locale === "zh" ? `投标文件说明 ${item.title}` : `Bid file notes ${item.title}`} placeholder={locale === "zh" ? "来源、责任人或待确认事项" : "Source, owner, or open questions"} value={item.notes} onChange={(event) => updateProject("bidFileChecklist", project.bidFileChecklist.map((entry) => entry.id === item.id ? { ...entry, notes: event.target.value } : entry))}/><button className="row-delete" type="button" aria-label={locale === "zh" ? `删除投标文件 ${item.title}` : `Delete bid file ${item.title}`} onClick={() => void removeBidChecklistItem(item)}><Trash2 size={16}/></button></div>)}</div>{!project.bidFileChecklist.length && <div className="empty-state"><FileOutput size={26}/><p>{locale === "zh" ? "招标要求分析后，识别到的投标文件会逐项加入清单。" : "Files identified by tender analysis will be added here."}</p></div>}</section>
     </>;
   };
 
   const renderBid = () => <section className="work-section" id="bid-output">
-    <div className="section-heading"><div><p>{locale === "zh" ? "投标阶段 / 文件编制" : "BID / DOCUMENT PREPARATION"}</p><h2>{locale === "zh" ? "投标文件输出" : "Bid file output"}</h2></div><span>{project.bidFileChecklist.length}</span></div>
+    <div className="section-heading"><div><h2>{locale === "zh" ? "投标文件输出" : "Bid file output"}</h2></div><span>{project.bidFileChecklist.length}</span></div>
     {project.bidFileChecklist.length ? <div className="bid-output-list">{project.bidFileChecklist.map((item) => {
       const expanded = expandedBidFileId === item.id;
       const templates = item.templateSourceIds.map((id) => project.sources.find((source) => source.id === id)).filter((source): source is SourceDocument => Boolean(source));
@@ -3186,7 +3266,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
 
     return <>
       <section className="work-section" id="handover-award">
-        <div className="section-heading"><div><p>{locale === "zh" ? "中标基线 / 补充资料" : "AWARD BASELINE / SUPPLEMENTS"}</p><h2>{locale === "zh" ? "中标补充内容" : "Award supplements"}</h2></div><span>{awardSources.length}</span></div>
+        <div className="section-heading"><div><h2>{locale === "zh" ? "中标补充内容" : "Award supplements"}</h2></div><span>{awardSources.length}</span></div>
         <div className="handover-award-layout">
           <div className="handover-source-panel">
             <div className="handover-panel-heading"><strong>{locale === "zh" ? "中标函及相关资料" : "Award letter and related files"}</strong><label className="file-command"><Upload size={16}/>{locale === "zh" ? "上传资料" : "Upload files"}<input hidden multiple type="file" accept=".pdf,.docx,.xlsx,.pptx,.md,.txt,.csv,.png,.jpg,.jpeg,.webp" onChange={(event) => { void importHandoverAwardFiles(event.target.files); event.currentTarget.value = ""; }}/></label></div>
@@ -3200,7 +3280,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       </section>
 
       <section className="work-section" id="handover-checklist">
-        <div className="section-heading"><div><p>{locale === "zh" ? "责任分派 / 部门响应" : "ASSIGNMENT / DEPARTMENT RESPONSE"}</p><h2>{locale === "zh" ? "交底清单输出" : "Handover checklist"}</h2></div><span>{project.handover.tasks.length}</span></div>
+        <div className="section-heading"><div><h2>{locale === "zh" ? "交底清单输出" : "Handover checklist"}</h2></div><span>{project.handover.tasks.length}</span></div>
 
         <div className="handover-baseline">
           <div><span>{locale === "zh" ? "项目名称" : "Project"}</span><strong>{project.name}</strong></div>
@@ -3264,8 +3344,8 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
       { format: "xlsx", label: "Excel", accept: ".xlsx" },
       { format: "pptx", label: "PowerPoint", accept: ".pptx" },
     ];
-    return <section className="project-settings-panel" aria-label={locale === "zh" ? "项目设置" : "Project settings"}>
-      <div className="project-settings-heading"><div><p>PROJECT SETTINGS / LOCAL FILES</p><h2>{locale === "zh" ? "项目设置" : "Project settings"}</h2></div><button className="row-delete" type="button" aria-label={locale === "zh" ? "关闭项目设置" : "Close project settings"} onClick={() => setProjectSettingsOpen(false)}><X size={18}/></button></div>
+    return <section className="project-settings-panel" ref={projectSettingsSection} aria-label={locale === "zh" ? "项目设置" : "Project settings"}>
+      <div className="project-settings-heading"><div><h2>{locale === "zh" ? "项目设置" : "Project settings"}</h2></div><button className="row-delete" type="button" aria-label={locale === "zh" ? "关闭项目设置" : "Close project settings"} onClick={() => setProjectSettingsOpen(false)}><X size={18}/></button></div>
       <div className="project-path-settings">
         <label><span>{locale === "zh" ? "项目路径" : "Project folder"}</span><input readOnly disabled={Boolean(directoryHandle)} value={directoryHandle?.name || ""} placeholder={locale === "zh" ? "尚未选择" : "Not selected"}/></label>
         <div className="project-path-actions">
@@ -3296,7 +3376,7 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     const allSelected = allPaths.length > 0 && allPaths.every((path) => selectedOutputPaths.has(path));
     return <section className="work-section output-file-section">
       <div className="section-heading output-file-heading">
-        <div><p>{locale === "zh" ? "项目文件 / 保留目录" : "PROJECT FILES / PRESERVE PATHS"}</p><h2>{locale === "zh" ? "输出文件" : "Output files"}</h2><span className="section-description">{locale === "zh" ? "从项目各阶段选择实际文件，输出时保留项目名称、阶段和模块目录。" : "Select actual project files and preserve the project, stage, and module folders in the output."}</span></div>
+        <div><h2>{locale === "zh" ? "输出文件" : "Output files"}</h2><span className="section-description">{locale === "zh" ? "从项目各阶段选择实际文件，输出时保留项目名称、阶段和模块目录。" : "Select actual project files and preserve the project, stage, and module folders in the output."}</span></div>
         <button className="icon-command" type="button" disabled={!directoryHandle || busy || outputFilesLoading} aria-label={locale === "zh" ? "重新扫描输出文件" : "Rescan output files"} title={locale === "zh" ? "重新扫描" : "Rescan"} onClick={() => void refreshWorkspaceOutputFiles()}><RefreshCw size={18}/></button>
       </div>
 
@@ -3337,23 +3417,156 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     </section>;
   };
 
+  const readCleanupFile = async (candidate: GeneratedCleanupCandidate, directory: DirectoryHandleLike | null, files: Map<string, File>, blobs: Map<string, Blob>): Promise<Blob | null> => {
+    if (candidate.scope === "local") return candidate.sourceIds.map((id) => files.get(id)).find(Boolean)
+      || candidate.recordIds.map((id) => blobs.get(id)).find(Boolean) || null;
+    if (!isUsableProjectDirectory(directory)) throw new Error(locale === "zh" ? "请先在项目设置中选择项目目录。" : "Choose the project folder in Project settings first.");
+    try { return await readWorkspaceFileFromRelativePath(directory, candidate.relativePath); }
+    catch (error) {
+      if (error instanceof Error && (error.name === "NotFoundError" || (error as Error & { code?: string }).code === "ENOENT")) return null;
+      throw error;
+    }
+  };
+
+  const scanCleanup = async (keepMessage = false) => {
+    const sequence = ++cleanupSequence.current;
+    setCleanupLoading(true);
+    setCleanupError("");
+    if (!keepMessage) setCleanupMessage("");
+    const snapshot = { project: projectRef.current, directory: directoryHandle, files: new Map(sourceFilesRef.current), blobs: new Map(generatedBlobs) };
+    const [cache, generated] = await Promise.allSettled([
+      window.bidDesktop?.cleanup ? window.bidDesktop.cleanup.preview() : Promise.resolve(null),
+      previewGeneratedCleanup(snapshot.project, { readFile: (candidate) => readCleanupFile(candidate, snapshot.directory, snapshot.files, snapshot.blobs) }),
+    ]);
+    if (sequence !== cleanupSequence.current) return;
+    const generatedPreview = generated.status === "fulfilled" ? generated.value : { projectId: snapshot.project.id, candidates: [], blocked: [] };
+    cleanupSnapshot.current = { ...snapshot, generated: generatedPreview, cache: cache.status === "fulfilled" ? cache.value : null };
+    setCleanupCategories(cache.status === "fulfilled" ? cache.value?.categories || [] : []);
+    setCleanupFiles(describeCleanupFiles(generatedPreview));
+    if (!keepMessage && generatedPreview.blocked.length) setCleanupMessage(locale === "zh"
+      ? `另有 ${generatedPreview.blocked.length} 个文件仍被使用或无法核实，已保留。`
+      : `${generatedPreview.blocked.length} other files are in use or could not be verified and will be kept.`);
+    if (cache.status === "rejected" || generated.status === "rejected") setCleanupError(locale === "zh" ? "部分内容无法扫描，请检查目录授权并重新扫描。" : "Some items could not be scanned. Check folder access and scan again.");
+    setCleanupLoading(false);
+  };
+
+  const describeCleanupFiles = (preview: GeneratedCleanupPreview): CleanupGeneratedFile[] => preview.candidates.map((file) => ({
+      ...file, bytes: file.fingerprint?.size ?? file.bytes,
+      error: !window.bidDesktop && file.scope === "project" && file.exists
+        ? (locale === "zh" ? "浏览器无法使用系统回收站，原文件将保留。" : "The browser cannot use the system Recycle Bin. This file will be kept.")
+        : file.error ? (locale === "zh"
+        ? (file.error === "GENERATED_FILE_CHANGED" ? "文件内容已改变，已保留。" : "无法核实文件，请检查项目目录授权。")
+        : (file.error === "GENERATED_FILE_CHANGED" ? "This file has changed and will be kept." : "Could not verify this file. Check project folder access.")) : undefined,
+    }));
+
+  const cleanSelectedFiles = async (selection: CleanupSelection) => {
+    const snapshot = cleanupSnapshot.current;
+    if (!snapshot || cleanupRunningRef.current || busyRef.current) throw new Error(locale === "zh" ? "请等待扫描完成。" : "Wait for the scan to finish.");
+    if (projectRef.current !== snapshot.project || directoryHandle !== snapshot.directory) {
+      setCleanupError(locale === "zh" ? "项目已变化，请重新扫描后清理。" : "The project has changed. Scan again before cleaning up.");
+      throw new Error("STALE_PREVIEW");
+    }
+    cleanupRunningRef.current = true;
+    busyRef.current = true;
+    setCleanupRunning(true);
+    setBusy(true);
+    setCleanupError("");
+    publishHistoryState();
+    const failures: string[] = [];
+    let generatedCount = 0, cacheBytes = 0;
+    try {
+      if (selection.categories.length) {
+        try {
+          if (!snapshot.cache || !window.bidDesktop?.cleanup) throw new Error("NO_CACHE_PREVIEW");
+          const result = await window.bidDesktop.cleanup.run({ token: snapshot.cache.token, categories: selection.categories });
+          cacheBytes = result.categories.reduce((total, category) => total + category.bytes, 0);
+          if (result.errors.length || result.categories.some((category) => category.failed)) failures.push(locale === "zh" ? "部分缓存已变化或无法访问，已保留。" : "Some cache files changed or could not be accessed and were kept.");
+        } catch { failures.push(locale === "zh" ? "缓存清理未完成，请重新扫描。" : "Cache cleanup did not finish. Scan again."); }
+      }
+      if (selection.generatedIds.length) {
+        const result = await executeGeneratedCleanup(snapshot.project, snapshot.generated, selection.generatedIds, {
+          readFile: (candidate) => readCleanupFile(candidate, snapshot.directory, snapshot.files, snapshot.blobs),
+          trashFile: async (candidate, expectedFingerprint) => {
+            if (!snapshot.directory) throw new Error("PROJECT_FOLDER_REQUIRED");
+            await trashWorkspaceFileFromRelativePath(snapshot.directory, candidate.relativePath, expectedFingerprint);
+          },
+        });
+        const successful = result.results.filter((item) => item.status === "cleaned" || item.status === "missing");
+        generatedCount = successful.length;
+        if (successful.length) {
+          const nextFiles = new Map(snapshot.files), nextBlobs = new Map(snapshot.blobs);
+          for (const id of result.sourceIds) { nextFiles.delete(id); knownSourceFilesRef.current.delete(id); }
+          for (const id of result.recordIds) nextBlobs.delete(id);
+          const nextProject = syncProjectStage({ ...result.project, updatedAt: new Date().toISOString() });
+          // Old history must not recreate files that the user has just cleaned.
+          historyRef.current.reset();
+          commitProject(nextProject, "", false);
+          sourceFilesRef.current = nextFiles;
+          setSourceFiles(nextFiles);
+          setGeneratedBlobs(nextBlobs);
+          if (result.sourceIds.includes(selectedSourceId)) setSelectedSourceId("");
+          const removedPaths = new Set(snapshot.generated.candidates.filter((candidate) => successful.some((item) => item.id === candidate.id)).map((candidate) => candidate.relativePath));
+          setSelectedOutputPaths((current) => new Set([...current].filter((path) => !removedPaths.has(path))));
+          for (const id of result.sourceIds) {
+            try { await removePersistedSourceFile(nextProject.id, id); }
+            catch { if (!failures.includes("LOCAL_RECORDS")) failures.push("LOCAL_RECORDS"); }
+          }
+          if (snapshot.directory) {
+            try { await saveProjectStateToDirectory(snapshot.directory, nextProject, nextFiles); }
+            catch { failures.push(locale === "zh" ? "项目记录尚未写入目录，请检查目录授权。" : "The project record could not be saved to its folder. Check folder access."); }
+            await refreshWorkspaceOutputFiles(snapshot.directory);
+          }
+          // Refresh from the post-cleanup maps, rather than the render's old closures.
+          cleanupSnapshot.current = null;
+          const [cache, generated] = await Promise.all([
+            window.bidDesktop?.cleanup?.preview().catch(() => null) ?? Promise.resolve(null),
+            previewGeneratedCleanup(nextProject, { readFile: (candidate) => readCleanupFile(candidate, snapshot.directory, nextFiles, nextBlobs) }),
+          ]);
+          cleanupSnapshot.current = { project: nextProject, directory: snapshot.directory, files: nextFiles, blobs: nextBlobs, generated, cache };
+          setCleanupCategories(cache?.categories || []);
+          setCleanupFiles(describeCleanupFiles(generated));
+        }
+        if (result.results.some((item) => !["cleaned", "missing"].includes(item.status))) failures.push(locale === "zh" ? "部分生成文件已变化、仍被使用或无法移入回收站，已保留。" : "Some generated files changed, are in use, or could not be recycled and were kept.");
+      }
+      if (!generatedCount) await scanCleanup(true);
+      const summary = locale === "zh" ? `已清理缓存 ${formatFileSize(cacheBytes)}，处理 ${generatedCount} 个生成文件记录。`
+        : `Cleaned ${formatFileSize(cacheBytes)} of cache and ${generatedCount} generated-file records.`;
+      setCleanupMessage(summary);
+      if (failures.length) {
+        const text = failures.map((failure) => failure === "LOCAL_RECORDS" ? (locale === "zh" ? "部分本机副本未能清理。" : "Some local copies could not be removed.") : failure).join(" ");
+        setCleanupError(text);
+        throw new Error(text);
+      }
+    } finally {
+      cleanupRunningRef.current = false;
+      busyRef.current = false;
+      setCleanupRunning(false);
+      setBusy(false);
+      publishHistoryState();
+    }
+  };
+
   const content = view === "presales" ? renderPresales() : view === "requirements" ? renderRequirements() : view === "bid" ? renderBid() : view === "handover" ? renderHandover() : renderOutputs();
 
-  return <div className="solution-app" data-ready={ready ? "true" : "false"} onClickCapture={guardFileImport}>
-    <header className="project-header">
-      <div><p>{t.workspaceEyebrow}</p><h1>{t.project}</h1><span>{project.name}</span></div>
+  return <div className="solution-app" ref={solutionApp} data-ready={ready ? "true" : "false"} onClickCapture={guardFileImport}>
+    <header className="project-header" ref={projectHeader}>
+      <div><h1>{t.project}</h1><nav className="workspace-toolbar" aria-label={locale === "zh" ? "项目操作" : "Project actions"}>
+        <button type="button" disabled={busy} aria-label={t.reset} onClick={resetCurrentProject} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button>
+        <button className={`project-path-command${projectSettingsOpen ? " active" : ""}`} type="button" disabled={busy} aria-expanded={projectSettingsOpen} aria-label={t.projectPath} onClick={() => { setProjectSettingsOpen(!projectSettingsOpen); if (!projectSettingsOpen) window.requestAnimationFrame(() => projectSettingsSection.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }} title={t.projectPath}><FolderCog size={17}/><span>{t.projectPath}</span></button>
+        <button className="file-cleanup-command" type="button" disabled={busy || !ready || !filesHydrated} aria-label={locale === "zh" ? "文件清理" : "File cleanup"} title={locale === "zh" ? "文件清理" : "File cleanup"} onClick={() => { setCleanupOpen(true); void scanCleanup(); }}><Trash2 size={17}/><span>{locale === "zh" ? "文件清理" : "File cleanup"}</span></button>
+      </nav></div>
       <div className="header-metrics"><div><strong>{coverage.total}</strong><span>{t.total}</span></div><div><strong>{coverage.evidenced}</strong><span>{t.evidenced}</span></div><div><strong>{coverage.approved}</strong><span>{t.approved}</span></div><div><strong>{coverage.pending}</strong><span>{t.pending}</span></div></div>
     </header>
-    <div className="privacy-bar"><ShieldCheck size={17}/><span>{t.local}</span><span className="notice" aria-live="polite">{busy ? (locale === "zh" ? "处理中…" : "Working…") : notice}</span></div>
-    <nav className="workspace-toolbar" aria-label={locale === "zh" ? "工作区操作" : "Workspace actions"}><button type="button" aria-label={t.reset} onClick={resetCurrentProject} title={t.reset}><RotateCcw size={17}/><span>{t.reset}</span></button><button className={`project-path-command${projectSettingsOpen ? " active" : ""}`} type="button" disabled={busy} aria-expanded={projectSettingsOpen} aria-label={t.projectPath} onClick={() => setProjectSettingsOpen((current) => !current)} title={t.projectPath}><FolderCog size={17}/><span>{t.projectPath}</span></button></nav>
+    <ModelControls locale={locale} busy={busy} toolbarTarget={headerSettingsTarget}/>
+    {cleanupOpen && <FileCleanupPanel locale={locale} busy={cleanupRunning} loading={cleanupLoading} categories={cleanupCategories} generatedFiles={cleanupFiles} message={cleanupMessage} error={cleanupError} onRefresh={() => scanCleanup()} onClean={cleanSelectedFiles} onClose={() => { if (!cleanupRunningRef.current) { ++cleanupSequence.current; setCleanupOpen(false); } }}/>}
     {projectSettingsOpen && renderProjectSettings()}
+    {notice && notice !== copy.zh.saved && notice !== copy.en.saved && <div className="workbench-notice" role="status" aria-live="polite">{notice}</div>}
     <div className="workspace-shell">
       <aside className="stage-rail" aria-label={locale === "zh" ? "解决方案流程" : "Solution lifecycle"}>{viewMeta.map((item) => { const Icon = item.icon; return <button type="button" aria-label={t[item.id]} title={t[item.id]} className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}><span>{item.code}</span><Icon size={19}/><strong>{t[item.id]}</strong><ChevronRight size={16}/></button>; })}<div className="rail-status" data-stage={currentStage}><p>{locale === "zh" ? "当前阶段" : "Current stage"}</p><strong>{projectStageLabels[locale][currentStage]}</strong><span>{issues.filter((item) => item.severity === "error").length} {locale === "zh" ? "个阻断项" : "blocking issues"}</span></div></aside>
       <main className="workspace-content">{content}</main>
     </div>
     {ocrChoiceSourceIds && <div className="model-choice-backdrop">
       <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="ocr-choice-title">
-        <p>OCR / PREPROCESSING</p>
         <h2 id="ocr-choice-title">{locale === "zh" ? "导入文件存在无法识别项，是否通过 OCR 重新识别？" : "Some imported files could not be recognized. Run OCR?"}</h2>
         <span>{locale === "zh" ? "选择“否”会保留原文件并标记为仅上传、未处理。" : "Choosing No keeps the original files and marks them as uploaded only."}</span>
         <div><button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={confirmTenderOcr}><RefreshCw size={18}/>{locale === "zh" ? "是" : "Yes"}</button><button type="button" onClick={skipTenderOcr}><X size={18}/>{locale === "zh" ? "否" : "No"}</button></div>
@@ -3361,18 +3574,16 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     </div>}
     {pendingModelAction && <div className="model-choice-backdrop">
       <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="model-choice-title">
-        <p>MODEL ACTION / EXECUTION PATH</p>
-        <h2 id="model-choice-title">{pendingModelAction.kind === "tender-ocr" ? (locale === "zh" ? "模型未配置，请前往配置。" : "The model is not configured. Open configuration.") : (locale === "zh" ? "未配置大模型，请前往配置。" : "No model is configured. Open model configuration.")}</h2>
-        <span>{locale === "zh" ? "可以前往配置可直接调用的模型，也可以输出当前操作对应的大模型任务文件。" : "Configure a directly callable model, or output a model task file for the current action."}</span>
+        <h2 id="model-choice-title">{locale === "zh" ? "请先完善当前任务的模型设置。" : "Complete the model settings for this task."}</h2>
+        <span>{locale === "zh" ? "可在当前工作台设置模型，或输出任务文件稍后执行。" : "Set up a model here, or export the task to run later."}</span>
         <div>
-          <button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => void rememberModelActionAndOpenSettings(pendingModelAction)}><Settings2 size={18}/>{locale === "zh" ? "是，前往配置" : "Yes, configure model"}</button>
-          <button type="button" onClick={outputPendingModelTask}><FileText size={18}/>{locale === "zh" ? "否，输出任务" : "No, output task"}</button>
+          <button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => void rememberModelActionAndOpenSettings(pendingModelAction)}><Settings2 size={18}/>{locale === "zh" ? "展开模型设置" : "Open model settings"}</button>
+          <button type="button" onClick={outputPendingModelTask}><FileText size={18}/>{locale === "zh" ? "输出任务" : "Export task"}</button>
         </div>
       </section>
     </div>}
     {pendingDirectoryChange && <div className="model-choice-backdrop">
       <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="directory-change-title">
-        <p>PROJECT FOLDER / LOCAL MIGRATION</p>
         <h2 id="directory-change-title">{pendingDirectoryChange.mode === "migrate"
           ? (locale === "zh" ? "修改路径会迁移当前项目到新路径，可能会需要一些时间，请等候..." : "Changing the folder migrates the current project and may take some time. Please wait.")
           : (locale === "zh" ? "选定路径后将创建项目文件夹，是否继续？" : "The project folder structure will be created in the selected folder. Continue?")}</h2>
@@ -3384,15 +3595,23 @@ export default function SolutionWorkbench({ initialView = "presales" }: Props) {
     </div>}
     {projectPathRequired && <div className="model-choice-backdrop">
       <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="project-path-required-title">
-        <p>PROJECT FOLDER / REQUIRED</p>
         <h2 id="project-path-required-title">{t.projectPathRequired}</h2>
         <span>{t.projectPathRequiredHint}</span>
         <div><button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => setProjectPathRequired(false)}><Check size={18}/>{t.acknowledge}</button></div>
       </section>
     </div>}
+    {workspaceRecovery && <div className="model-choice-backdrop">
+      <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="workspace-recovery-title">
+        <h2 id="workspace-recovery-title">{locale === "zh" ? "项目缓存无法读取，请从原项目目录恢复。" : "The project cache could not be read. Restore it from the original project folder."}</h2>
+        <span>{workspaceRecovery.saved
+          ? (locale === "zh" ? `原始内容已备份到本机缓存“${workspaceRecovery.key}”。恢复完成前暂停自动保存。` : `The original content was backed up locally as “${workspaceRecovery.key}”. Autosave is paused until recovery is complete.`)
+          : (locale === "zh" ? "本机缓存空间不足，原始缓存仍保持原样。你可以载入原项目，或保存原始缓存备份后新建项目。" : "The local cache is full. The original value is unchanged. Load your project folder, or save a copy of the original cache before starting a new project.")}</span>
+        {notice && <span role="status">{notice}</span>}
+        <div><button ref={modelChoicePrimary} className="model-choice-primary" type="button" disabled={busy} onClick={() => void restoreWorkspaceAfterCacheFailure()}><FolderOpen size={18}/>{locale === "zh" ? "载入原项目目录" : "Load original project folder"}</button><button type="button" disabled={busy} onClick={startNewWorkspaceAfterCacheFailure}><Save size={18}/>{locale === "zh" ? "保存备份并新建项目" : "Save backup and start a new project"}</button></div>
+      </section>
+    </div>}
     {outputPathRequired && <div className="model-choice-backdrop">
       <section className="model-choice-dialog" role="alertdialog" aria-modal="true" aria-labelledby="output-path-required-title">
-        <p>OUTPUT FOLDER / REQUIRED</p>
         <h2 id="output-path-required-title">{locale === "zh" ? "未设置输出路径，请先选择输出路径。" : "No output folder is set. Choose an output folder first."}</h2>
         <span>{locale === "zh" ? "当前输出操作已取消，已选择的文件保持不变。" : "The output was cancelled and the current file selection is preserved."}</span>
         <div><button ref={modelChoicePrimary} className="model-choice-primary" type="button" onClick={() => setOutputPathRequired(false)}><Check size={18}/>{t.acknowledge}</button></div>

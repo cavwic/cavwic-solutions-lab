@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { ModelSettings, ModelProvider } from "./model-settings";
+import { desktopAwareFetch } from "./desktop-bridge";
+import type { ModelSettings, ModelChannel } from "./model-settings";
 import { requestPresalesDraft } from "./presales-generation";
 import {
   handoverDeliverableTypeSchema,
@@ -100,9 +101,9 @@ export async function requestHandoverTaskSplit(
   settings: ModelSettings,
   apiKey: string,
   prompt: string,
-  fetcher: typeof fetch = fetch,
-): Promise<{ tasks: HandoverSplitTask[]; model: string; provider: Exclude<ModelProvider, "codex"> }> {
-  const result = await requestPresalesDraft(settings, apiKey, prompt, fetcher);
+  fetcher: typeof fetch = desktopAwareFetch,
+): Promise<{ tasks: HandoverSplitTask[]; model: string; provider: ModelChannel }> {
+  const result = await requestPresalesDraft(settings, apiKey, prompt, fetcher, "analysis");
   const parsed = splitResponseSchema.parse(parseJsonObject(result.content));
   return { ...result, tasks: parsed.tasks };
 }

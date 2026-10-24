@@ -77,10 +77,10 @@ describe("tender generation", () => {
     const fetcher = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: unknown }> };
       expect(JSON.stringify(body.messages[1].content)).toContain("data:image/png;base64");
-      return new Response(JSON.stringify({ choices: [{ message: { content: "识别后的招标文件内容" } }] }), { status: 200 });
+      return new Response(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "识别后的招标文件内容" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
     });
     const segments = await requestOcrRecognition(
-      { ...DEFAULT_MODEL_SETTINGS, provider: "local", localEndpoint: "http://127.0.0.1:9000/v1/chat/completions", localModel: "vision-model" },
+      { ...DEFAULT_MODEL_SETTINGS, provider: "local", localRuntime: "openai", localEndpoint: "http://127.0.0.1:9000/v1/chat/completions", localModel: "vision-model" },
       "",
       new File([new Uint8Array([137, 80, 78, 71])], "scan.png", { type: "image/png" }),
       (value) => progress.push(value),
