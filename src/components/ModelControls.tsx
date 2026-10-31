@@ -310,7 +310,7 @@ export default function ModelControls({ locale, busy = false, toolbarTarget }: {
         {dirty && <small>{t.unsaved}</small>}
       </div>
       <button type="button" className={`model-expand-toggle${expanded ? " expanded" : ""}`} aria-label={expanded ? t.close : t.open} title={expanded ? t.close : t.open} aria-expanded={expanded} aria-controls="workbench-model-settings" disabled={locked} onClick={() => { setExpanded(!expanded); if (!expanded) window.requestAnimationFrame(() => section.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }}><ChevronDown size={19}/></button>
-      <button type="button" className="model-skills-button" data-testid="import-skills" disabled={locked} title={t.skillsHint} onClick={() => setSkillsOpen(true)}><BookOpen size={16}/><span>{t.importSkills}</span></button>
+      <button type="button" className="model-skills-button" data-testid="import-skills" aria-label={t.importSkills} disabled={locked} title={t.skillsHint} onClick={() => setSkillsOpen(true)}><BookOpen size={16}/><span>{t.importSkills}</span></button>
       </div>
     </>, toolbarTarget)}
     <section className="model-controls" id="workbench-model-controls" data-testid="model-controls" ref={section} aria-label={t.channels} hidden={!expanded}>
